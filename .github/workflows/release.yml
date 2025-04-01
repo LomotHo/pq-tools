@@ -28,3 +28,4 @@ jobs:
         extra_files: README.md
         ldflags: "-s -w -X main.version=${{ github.ref_name }}"
         sha256sum: true
+        md5sum: false
