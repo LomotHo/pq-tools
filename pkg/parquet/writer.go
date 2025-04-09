@@ -1,58 +1,37 @@
 package parquet
 
 import (
-	"encoding/json"
 	"fmt"
+	"io"
 	"math"
+	"os"
 	"path/filepath"
 	"strings"
 
-	"github.com/xitongsys/parquet-go-source/local"
-	parquetreader "github.com/xitongsys/parquet-go/reader"
-	"github.com/xitongsys/parquet-go/writer"
+	"github.com/parquet-go/parquet-go"
 )
-
-// 将接口数组转换为map数组 (写入模块专用版本)
-func convertDataToMaps(data []interface{}) ([]map[string]interface{}, error) {
-	result := make([]map[string]interface{}, len(data))
-	
-	for i, item := range data {
-		// 先将数据序列化为JSON，再反序列化为map
-		jsonBytes, err := json.Marshal(item)
-		if err != nil {
-			return nil, fmt.Errorf("序列化数据失败: %v", err)
-		}
-		
-		var mapData map[string]interface{}
-		if err := json.Unmarshal(jsonBytes, &mapData); err != nil {
-			return nil, fmt.Errorf("反序列化数据失败: %v", err)
-		}
-		
-		// 直接使用原始字段名
-		// parquet-go 在读取后已经保持了原始的字段名
-		result[i] = mapData
-	}
-	
-	return result, nil
-}
 
 // SplitParquetFile 将parquet文件拆分成多个小文件
 func SplitParquetFile(filePath string, numFiles int) error {
-	// 创建reader
-	reader, err := NewParquetReader(filePath)
+	// 打开原始文件
+	f, err := os.Open(filePath)
 	if err != nil {
-		return err
+		return fmt.Errorf("无法打开文件: %v", err)
 	}
+	defer f.Close()
+
+	// 解析parquet文件
+	reader := parquet.NewReader(f)
 	defer reader.Close()
 
 	// 获取文件总行数
-	totalRows := reader.Count()
+	totalRows := reader.NumRows()
 	if totalRows == 0 {
 		return fmt.Errorf("文件为空，无需拆分")
 	}
 
 	// 计算每个文件的行数
-	rowsPerFile := int(math.Ceil(float64(totalRows) / float64(numFiles)))
+	rowsPerFile := int64(math.Ceil(float64(totalRows) / float64(numFiles)))
 
 	// 准备输出文件名
 	baseName := filepath.Base(filePath)
@@ -60,125 +39,75 @@ func SplitParquetFile(filePath string, numFiles int) error {
 	baseName = strings.TrimSuffix(baseName, ext)
 	dir := filepath.Dir(filePath)
 
-	// 创建一个新的读取器来读取所有数据
-	fr, err := local.NewLocalFileReader(filePath)
-	if err != nil {
-		return fmt.Errorf("无法重新打开文件: %v", err)
-	}
-	defer fr.Close()
-	
-	// 使用nil作为schema，自动适应任何parquet文件格式
-	newReader, err := parquetreader.NewParquetReader(fr, nil, 4)
-	if err != nil {
-		return fmt.Errorf("无法创建新的Parquet读取器: %v", err)
-	}
-	defer newReader.ReadStop()
+	// 获取Schema
+	schema := reader.Schema()
 
-	// 使用 ReadByNumber 读取所有数据
-	rawData, err := newReader.ReadByNumber(int(totalRows))
-	if err != nil {
+	// 读取所有数据
+	allRows := make([]map[string]interface{}, totalRows)
+	rowBuf := make([]parquet.Row, totalRows)
+	
+	// 重置位置到开始
+	if err := reader.SeekToRow(0); err != nil {
+		return fmt.Errorf("定位到开始行失败: %v", err)
+	}
+	
+	// 读取所有行
+	count, err := reader.ReadRows(rowBuf)
+	if err != nil && err != io.EOF {
 		return fmt.Errorf("读取数据失败: %v", err)
 	}
-
-	// 将数据转换为 []map[string]interface{}
-	allData, err := convertDataToMaps(rawData)
-	if err != nil {
-		return fmt.Errorf("转换数据失败: %v", err)
+	
+	// 转换到map格式
+	for i := 0; i < count; i++ {
+		row := make(map[string]interface{})
+		if err := reader.Schema().Reconstruct(&row, rowBuf[i]); err != nil {
+			return fmt.Errorf("转换行数据失败: %v", err)
+		}
+		allRows[i] = row
 	}
-
-	// 拆分数据并写入多个文件
-	for i := 0; i < numFiles && i*rowsPerFile < len(allData); i++ {
-		// 计算当前分片的开始和结束索引
-		startIdx := i * rowsPerFile
-		endIdx := (i + 1) * rowsPerFile
-		if endIdx > len(allData) {
-			endIdx = len(allData)
+	
+	// 拆分数据到多个文件
+	for i := 0; i < numFiles; i++ {
+		startRow := int64(i) * rowsPerFile
+		
+		// 如果起始行超过文件总行数，退出循环
+		if startRow >= int64(count) {
+			break
 		}
 		
-		// 提取当前分片数据
-		currentPartData := allData[startIdx:endIdx]
+		// 计算当前分片应该包含的行数
+		endRow := startRow + rowsPerFile
+		if endRow > int64(count) {
+			endRow = int64(count)
+		}
 		
 		// 创建输出文件
-		outputFile := filepath.Join(dir, fmt.Sprintf("%s_%d%s", baseName, i+1, ext))
-		
-		// 写入分片文件
-		if err := writeParquetFile(outputFile, currentPartData); err != nil {
-			return fmt.Errorf("写入分片文件 %s 失败: %v", outputFile, err)
-		}
-	}
-
-	return nil
-}
-
-// writeParquetFile 将数据写入parquet文件
-func writeParquetFile(filePath string, data []map[string]interface{}) error {
-	if len(data) == 0 {
-		return fmt.Errorf("没有数据可写入")
-	}
-
-	// 创建文件
-	fw, err := local.NewLocalFileWriter(filePath)
-	if err != nil {
-		return fmt.Errorf("无法创建输出文件: %v", err)
-	}
-	defer fw.Close()
-
-	// 从第一行数据构建schema
-	schemaStr := "{"
-	schemaStr += "\"Tag\":\"name=parquet-go-root\","
-	schemaStr += "\"Fields\":["
-	
-	firstItem := true
-	for key, val := range data[0] {
-		if !firstItem {
-			schemaStr += ","
-		}
-		firstItem = false
-		
-		// 根据值类型设置字段类型
-		parquetType := "BYTE_ARRAY"
-		convertedType := "UTF8"
-		
-		switch val.(type) {
-		case int, int32, int64:
-			parquetType = "INT64"
-			convertedType = ""
-		case float32, float64:
-			parquetType = "DOUBLE"
-			convertedType = ""
-		case bool:
-			parquetType = "BOOLEAN"
-			convertedType = ""
-		}
-		
-		fieldSchema := fmt.Sprintf("{\"Tag\":\"name=%s, type=%s", key, parquetType)
-		if convertedType != "" {
-			fieldSchema += fmt.Sprintf(", convertedtype=%s", convertedType)
-		}
-		fieldSchema += "\"}"
-		
-		schemaStr += fieldSchema
-	}
-	
-	schemaStr += "]}"
-
-	// 创建JSON写入器
-	pw, err := writer.NewJSONWriter(schemaStr, fw, 4)
-	if err != nil {
-		return fmt.Errorf("无法创建Parquet写入器: %v", err)
-	}
-	defer pw.WriteStop()
-
-	// 写入数据
-	for _, row := range data {
-		// 转换为JSON字符串
-		jsonData, err := json.Marshal(row)
+		outputPath := filepath.Join(dir, fmt.Sprintf("%s_%d%s", baseName, i+1, ext))
+		outputFile, err := os.Create(outputPath)
 		if err != nil {
-			return fmt.Errorf("序列化行数据失败: %v", err)
+			return fmt.Errorf("无法创建输出文件 %s: %v", outputPath, err)
 		}
 		
-		if err := pw.Write(string(jsonData)); err != nil {
-			return fmt.Errorf("写入行数据失败: %v", err)
+		// 创建parquet写入器
+		writer := parquet.NewWriter(outputFile, schema)
+		
+		// 写入指定数量的行
+		for j := startRow; j < endRow; j++ {
+			// 写入一行数据
+			if err := writer.Write(allRows[j]); err != nil {
+				outputFile.Close()
+				return fmt.Errorf("写入行失败: %v", err)
+			}
+		}
+		
+		// 完成写入并关闭文件
+		if err := writer.Close(); err != nil {
+			outputFile.Close()
+			return fmt.Errorf("关闭写入器失败: %v", err)
+		}
+		
+		if err := outputFile.Close(); err != nil {
+			return fmt.Errorf("关闭输出文件失败: %v", err)
 		}
 	}
 

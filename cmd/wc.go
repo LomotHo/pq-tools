@@ -28,7 +28,11 @@ var wcCmd = &cobra.Command{
 		defer reader.Close()
 
 		// 获取行数
-		count := reader.Count()
+		count, err := reader.Count()
+		if err != nil {
+			er(fmt.Sprintf("计算行数失败: %v", err))
+			return
+		}
 
 		// 根据参数显示结果
 		if linesOnly {
