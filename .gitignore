@@ -43,3 +43,5 @@ vendor/
 
 # Local development environment
 .env
+pq-tools
+pq
