@@ -28,14 +28,9 @@ func convertDataToMaps(data []interface{}) ([]map[string]interface{}, error) {
 			return nil, fmt.Errorf("反序列化数据失败: %v", err)
 		}
 		
-		// 创建新的map，将所有键转换为小写
-		normalizedMap := make(map[string]interface{})
-		for k, v := range mapData {
-			lowerKey := strings.ToLower(k)
-			normalizedMap[lowerKey] = v
-		}
-		
-		result[i] = normalizedMap
+		// 直接使用原始字段名
+		// parquet-go 在读取后已经保持了原始的字段名
+		result[i] = mapData
 	}
 	
 	return result, nil

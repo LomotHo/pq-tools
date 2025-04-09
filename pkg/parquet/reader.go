@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"strings"
 
 	"github.com/xitongsys/parquet-go-source/local"
 	"github.com/xitongsys/parquet-go/reader"
@@ -152,14 +151,10 @@ func convertToMaps(data []interface{}) ([]map[string]interface{}, error) {
 			return nil, fmt.Errorf("反序列化数据失败: %v", err)
 		}
 		
-		// 创建新的map，将所有键转换为小写
-		normalizedMap := make(map[string]interface{})
-		for k, v := range mapData {
-			lowerKey := strings.ToLower(k)
-			normalizedMap[lowerKey] = v
-		}
-		
-		result[i] = normalizedMap
+		// 直接使用原始字段名
+		// parquet-go 在读取后已经保持了原始的字段名
+		// 不需要额外的转换，这样可以保持原始数据中的大小写格式
+		result[i] = mapData
 	}
 	
 	return result, nil
@@ -168,6 +163,45 @@ func convertToMaps(data []interface{}) ([]map[string]interface{}, error) {
 // Count 返回parquet文件的行数
 func (r *ParquetReader) Count() int64 {
 	return r.Reader.GetNumRows()
+}
+
+// GetSchema 获取parquet文件的schema信息
+func (r *ParquetReader) GetSchema() (string, error) {
+	// 获取schema元素
+	schemaElements := r.Reader.SchemaHandler.SchemaElements
+	
+	// 建立简单的schema描述
+	var result string
+	result = fmt.Sprintf("文件包含 %d 行数据\n", r.Reader.GetNumRows())
+	result += "Schema 元素 (字段):\n"
+	
+	for i, element := range schemaElements {
+		// 添加字段名称
+		result += fmt.Sprintf("- 字段 #%d: %s\n", i, element.Name)
+		
+		// 添加字段类型（如果有）
+		if element.Type != nil {
+			result += fmt.Sprintf("  类型: %s\n", element.Type.String())
+		}
+		
+		// 添加转换类型（如果有）
+		if element.ConvertedType != nil {
+			result += fmt.Sprintf("  转换类型: %s\n", element.ConvertedType.String())
+		}
+		
+		// 添加重复类型
+		if element.RepetitionType != nil {
+			result += fmt.Sprintf("  重复类型: %s\n", element.RepetitionType.String())
+		}
+	}
+	
+	// 添加值列信息
+	result += "\n值列路径:\n"
+	for _, col := range r.Reader.SchemaHandler.ValueColumns {
+		result += fmt.Sprintf("- %s\n", col)
+	}
+	
+	return result, nil
 }
 
 // PrintJSON 以JSON格式打印数据
