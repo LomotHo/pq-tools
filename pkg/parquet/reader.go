@@ -273,9 +273,10 @@ func (r *ParquetReader) GetSchema() (string, error) {
 		return "", err
 	}
 	
-	// Build detailed schema information
+	// Build detailed schema information with improved formatting
 	result := fmt.Sprintf("File contains %d rows of data\n", r.rowNum)
 	result += "Schema elements (fields):\n"
+	result += "------------------------\n"  // Add separator line
 	result += schemaStr
 	
 	return result, nil
