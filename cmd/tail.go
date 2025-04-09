@@ -3,55 +3,55 @@ package cmd
 import (
 	"fmt"
 	"os"
-	"pq-tools/pkg/parquet"
+	"github.com/LomotHo/pq-tools/pkg/parquet"
 	"strconv"
 
 	"github.com/spf13/cobra"
 )
 
-// tailCmd 表示tail命令
+// tailCmd represents the tail command
 var tailCmd = &cobra.Command{
 	Use:   "tail [file]",
-	Short: "显示parquet文件的最后几行",
-	Long:  `显示parquet文件的最后几行内容，默认显示10行。`,
+	Short: "Display the last few rows of a Parquet file",
+	Long:  `Display the last few rows of a Parquet file, default is 10 rows.`,
 	Args:  cobra.MinimumNArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		filePath := args[0]
 		
-		// 获取行数参数
+		// Get the number of rows parameter
 		nStr, _ := cmd.Flags().GetString("n")
 		n, err := strconv.Atoi(nStr)
 		if err != nil {
-			n = 10 // 如果解析失败，默认显示10行
+			n = 10 // If parsing fails, display 10 rows by default
 		}
 		
-		// 获取格式化选项
+		// Get formatting option
 		pretty, _ := cmd.Flags().GetBool("pretty")
 
-		// 创建parquet读取器
+		// Create Parquet reader
 		reader, err := parquet.NewParquetReader(filePath)
 		if err != nil {
-			er(fmt.Sprintf("无法读取文件: %v", err))
+			er(fmt.Sprintf("Failed to read file: %v", err))
 			return
 		}
 		defer reader.Close()
 
-		// 读取最后n行
+		// Read the last n rows
 		rows, err := reader.Tail(n)
 		if err != nil {
-			er(fmt.Sprintf("读取数据失败: %v", err))
+			er(fmt.Sprintf("Failed to read data: %v", err))
 			return
 		}
 
-		// 打印结果
+		// Print the results
 		if err := parquet.PrintJSON(rows, os.Stdout, pretty); err != nil {
-			er(fmt.Sprintf("打印数据失败: %v", err))
+			er(fmt.Sprintf("Failed to print data: %v", err))
 		}
 	},
 }
 
 func init() {
 	rootCmd.AddCommand(tailCmd)
-	tailCmd.Flags().StringP("n", "n", "10", "要显示的行数")
-	tailCmd.Flags().BoolP("pretty", "p", false, "使用格式化输出（每条记录多行）")
+	tailCmd.Flags().StringP("n", "n", "10", "Number of rows to display")
+	tailCmd.Flags().BoolP("pretty", "p", false, "Use formatted output (multiple lines per record)")
 } 

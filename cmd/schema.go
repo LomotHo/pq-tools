@@ -2,37 +2,37 @@ package cmd
 
 import (
 	"fmt"
-	"pq-tools/pkg/parquet"
+	"github.com/LomotHo/pq-tools/pkg/parquet"
 
 	"github.com/spf13/cobra"
 )
 
-// schemaCmd 表示schema命令
+// schemaCmd represents the schema command
 var schemaCmd = &cobra.Command{
 	Use:   "schema [file]",
-	Short: "显示parquet文件的schema信息",
-	Long:  `显示parquet文件的schema信息，包括字段名称、类型等。`,
+	Short: "Display schema information of a Parquet file",
+	Long:  `Display schema information of a Parquet file, including field names, types, etc.`,
 	Args:  cobra.MinimumNArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		filePath := args[0]
 		
-		// 创建parquet读取器
+		// Create Parquet reader
 		reader, err := parquet.NewParquetReader(filePath)
 		if err != nil {
-			er(fmt.Sprintf("无法读取文件: %v", err))
+			er(fmt.Sprintf("Failed to read file: %v", err))
 			return
 		}
 		defer reader.Close()
 
-		// 获取schema信息
+		// Get schema information
 		schema, err := reader.GetSchema()
 		if err != nil {
-			er(fmt.Sprintf("获取schema信息失败: %v", err))
+			er(fmt.Sprintf("Failed to get schema information: %v", err))
 			return
 		}
 
-		// 打印结果
-		fmt.Printf("文件: %s 的Schema信息:\n\n%s\n", filePath, schema)
+		// Print the results
+		fmt.Printf("Schema information for file: %s\n\n%s\n", filePath, schema)
 	},
 }
 

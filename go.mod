@@ -1,4 +1,4 @@
-module pq-tools
+module github.com/LomotHo/pq-tools
 
 go 1.23.0
 

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"syscall"
 
 	"github.com/parquet-go/parquet-go"
 )
@@ -153,6 +154,10 @@ func PrintJSON(data []map[string]interface{}, w io.Writer, pretty bool) error {
 	
 	for _, row := range data {
 		if err := encoder.Encode(row); err != nil {
+			// 检查是否是 broken pipe 错误，如果是则停止写入但不返回错误
+			if pathErr, ok := err.(*os.PathError); ok && (pathErr.Err == syscall.EPIPE || pathErr.Err.Error() == "broken pipe") {
+				return nil
+			}
 			return err
 		}
 	}

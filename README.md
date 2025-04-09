@@ -6,8 +6,10 @@ PQ-Tools is a simple and easy-to-use Parquet file processing toolkit that allows
 
 - `pq head` - Display the first few rows of a Parquet file
 - `pq tail` - Display the last few rows of a Parquet file
+- `pq cat` - Display all rows in a Parquet file
 - `pq wc` - Count the number of rows in a Parquet file
 - `pq split` - Split a Parquet file into multiple smaller files
+- `pq schema` - Display the schema of a Parquet file
 - `pq generate` - Generate a test Parquet file with custom schema
 
 ## Installation
@@ -44,6 +46,20 @@ pq tail data.parquet
 
 # Display the last 5 rows
 pq tail -n 5 data.parquet
+```
+
+### Display all rows
+
+```bash
+# Display all rows in the file
+pq cat data.parquet
+```
+
+### Display schema
+
+```bash
+# Display the schema of a Parquet file
+pq schema data.parquet
 ```
 
 ### Count rows

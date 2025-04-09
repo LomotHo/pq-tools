@@ -2,7 +2,7 @@ package main
 
 import (
 	"os"
-	"pq-tools/cmd"
+	"github.com/LomotHo/pq-tools/cmd"
 )
 
 func main() {

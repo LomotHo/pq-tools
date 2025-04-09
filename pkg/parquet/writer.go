@@ -11,103 +11,103 @@ import (
 	"github.com/parquet-go/parquet-go"
 )
 
-// SplitParquetFile 将parquet文件拆分成多个小文件
+// SplitParquetFile splits a Parquet file into multiple smaller files
 func SplitParquetFile(filePath string, numFiles int) error {
-	// 打开原始文件
+	// Open the original file
 	f, err := os.Open(filePath)
 	if err != nil {
-		return fmt.Errorf("无法打开文件: %v", err)
+		return fmt.Errorf("failed to open file: %v", err)
 	}
 	defer f.Close()
 
-	// 解析parquet文件
+	// Parse the Parquet file
 	reader := parquet.NewReader(f)
 	defer reader.Close()
 
-	// 获取文件总行数
+	// Get the total number of rows in the file
 	totalRows := reader.NumRows()
 	if totalRows == 0 {
-		return fmt.Errorf("文件为空，无需拆分")
+		return fmt.Errorf("file is empty, no need to split")
 	}
 
-	// 计算每个文件的行数
+	// Calculate the number of rows for each file
 	rowsPerFile := int64(math.Ceil(float64(totalRows) / float64(numFiles)))
 
-	// 准备输出文件名
+	// Prepare output file names
 	baseName := filepath.Base(filePath)
 	ext := filepath.Ext(baseName)
 	baseName = strings.TrimSuffix(baseName, ext)
 	dir := filepath.Dir(filePath)
 
-	// 获取Schema
+	// Get the Schema
 	schema := reader.Schema()
 
-	// 读取所有数据
+	// Read all data
 	allRows := make([]map[string]interface{}, totalRows)
 	rowBuf := make([]parquet.Row, totalRows)
 	
-	// 重置位置到开始
+	// Reset position to the beginning
 	if err := reader.SeekToRow(0); err != nil {
-		return fmt.Errorf("定位到开始行失败: %v", err)
+		return fmt.Errorf("failed to seek to the beginning: %v", err)
 	}
 	
-	// 读取所有行
+	// Read all rows
 	count, err := reader.ReadRows(rowBuf)
 	if err != nil && err != io.EOF {
-		return fmt.Errorf("读取数据失败: %v", err)
+		return fmt.Errorf("failed to read data: %v", err)
 	}
 	
-	// 转换到map格式
+	// Convert to map format
 	for i := 0; i < count; i++ {
 		row := make(map[string]interface{})
 		if err := reader.Schema().Reconstruct(&row, rowBuf[i]); err != nil {
-			return fmt.Errorf("转换行数据失败: %v", err)
+			return fmt.Errorf("failed to convert row data: %v", err)
 		}
 		allRows[i] = row
 	}
 	
-	// 拆分数据到多个文件
+	// Split data into multiple files
 	for i := 0; i < numFiles; i++ {
 		startRow := int64(i) * rowsPerFile
 		
-		// 如果起始行超过文件总行数，退出循环
+		// If the starting row exceeds the total number of rows, exit the loop
 		if startRow >= int64(count) {
 			break
 		}
 		
-		// 计算当前分片应该包含的行数
+		// Calculate the number of rows this slice should contain
 		endRow := startRow + rowsPerFile
 		if endRow > int64(count) {
 			endRow = int64(count)
 		}
 		
-		// 创建输出文件
+		// Create the output file
 		outputPath := filepath.Join(dir, fmt.Sprintf("%s_%d%s", baseName, i+1, ext))
 		outputFile, err := os.Create(outputPath)
 		if err != nil {
-			return fmt.Errorf("无法创建输出文件 %s: %v", outputPath, err)
+			return fmt.Errorf("failed to create output file %s: %v", outputPath, err)
 		}
 		
-		// 创建parquet写入器
+		// Create the Parquet writer
 		writer := parquet.NewWriter(outputFile, schema)
 		
-		// 写入指定数量的行
+		// Write the specified number of rows
 		for j := startRow; j < endRow; j++ {
-			// 写入一行数据
+			// Write one row of data
 			if err := writer.Write(allRows[j]); err != nil {
 				outputFile.Close()
-				return fmt.Errorf("写入行失败: %v", err)
+				return fmt.Errorf("failed to write row: %v", err)
 			}
 		}
 		
-		// 完成写入并关闭文件
+		// Complete writing and close the file
 		if err := writer.Close(); err != nil {
 			outputFile.Close()
-			return fmt.Errorf("关闭写入器失败: %v", err)
+			return fmt.Errorf("failed to close writer: %v", err)
 		}
 		
 		if err := outputFile.Close(); err != nil {
-			return fmt.Errorf("关闭输出文件失败: %v", err)
+			return fmt.Errorf("failed to close output file: %v", err)
 		}
 	}
 
