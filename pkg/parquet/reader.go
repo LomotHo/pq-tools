@@ -25,8 +25,43 @@ func NewParquetReader(filepath string) (*ParquetReader, error) {
 		return nil, fmt.Errorf("failed to open file: %v", err)
 	}
 
+	// 检查文件是否为 Parquet 格式
+	// Parquet 文件的魔术头部是 "PAR1"
+	header := make([]byte, 4)
+	_, err = file.Read(header)
+	if err != nil {
+		file.Close()
+		return nil, fmt.Errorf("failed to read file header: %v", err)
+	}
+
+	// 将文件指针重置回开始位置
+	_, err = file.Seek(0, 0)
+	if err != nil {
+		file.Close()
+		return nil, fmt.Errorf("failed to reset file position: %v", err)
+	}
+
+	// 检查魔术头部，非 Parquet 文件给出友好错误
+	if string(header) != "PAR1" {
+		file.Close()
+		return nil, fmt.Errorf("invalid file format: the file is not a valid Parquet file")
+	}
+
 	// Create Parquet reader
-	reader := parquet.NewReader(file)
+	var reader *parquet.Reader
+	defer func() {
+		if r := recover(); r != nil {
+			file.Close()
+			err = fmt.Errorf("failed to create Parquet reader: %v, the file might be corrupted or not a valid Parquet file", r)
+		}
+	}()
+	
+	reader = parquet.NewReader(file)
+	if err != nil {
+		file.Close()
+		return nil, err
+	}
+	
 	rowNum := reader.NumRows()
 
 	return &ParquetReader{
