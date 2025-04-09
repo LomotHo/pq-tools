@@ -2,8 +2,8 @@ package cmd
 
 import (
 	"fmt"
-	"github.com/LomotHo/pq-tools/pkg/parquet"
-
+	"path/filepath"
+	"strings"
 	"github.com/spf13/cobra"
 )
 
@@ -16,23 +16,37 @@ var schemaCmd = &cobra.Command{
 	Run: func(cmd *cobra.Command, args []string) {
 		filePath := args[0]
 		
-		// Create Parquet reader
-		reader, err := parquet.NewParquetReader(filePath)
+		// Create Parquet reader with improved error handling
+		reader, err := handleParquetReader(filePath)
 		if err != nil {
-			er(fmt.Sprintf("Failed to read file: %v", err))
+			er(err.Error())
 			return
 		}
-		defer reader.Close()
+		defer safeClose(reader)
 
 		// Get schema information
 		schema, err := reader.GetSchema()
 		if err != nil {
-			er(fmt.Sprintf("Failed to get schema information: %v", err))
+			// Provide more specific error messages for common issues
+			if err.Error() == "invalid reader: reader is not initialized properly" {
+				er("Failed to get schema: the file appears to be corrupt or invalid")
+			} else if err.Error() == "failed to get schema: schema is nil" {
+				er("Failed to get schema: the file has no schema information")
+			} else {
+				er(fmt.Sprintf("Failed to get schema: %v", err))
+			}
 			return
 		}
 
-		// Print the results
-		fmt.Printf("Schema information for file: %s\n\n%s\n", filePath, schema)
+		// Get file size
+		fileName := filepath.Base(filePath)
+		
+		// Print the results with improved header
+		fmt.Println(strings.Repeat("=", 50))
+		fmt.Printf("  SCHEMA: %s\n", fileName)
+		fmt.Println(strings.Repeat("=", 50))
+		fmt.Println()
+		fmt.Println(schema)
 	},
 }
 

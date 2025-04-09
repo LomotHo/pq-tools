@@ -12,104 +12,151 @@ import (
 )
 
 // SplitParquetFile splits a Parquet file into multiple smaller files
+// Note: This function has known issues with certain Parquet files and INT64 encoding
 func SplitParquetFile(filePath string, numFiles int) error {
-	// Open the original file
-	f, err := os.Open(filePath)
+	// Open the source file
+	srcFile, err := os.Open(filePath)
 	if err != nil {
-		return fmt.Errorf("failed to open file: %v", err)
+		return fmt.Errorf("failed to open source file: %v", err)
 	}
-	defer f.Close()
-
-	// Parse the Parquet file
-	reader := parquet.NewReader(f)
+	defer srcFile.Close()
+	
+	// Check if the file has a valid Parquet header
+	header := make([]byte, 4)
+	_, err = srcFile.Read(header)
+	if err != nil {
+		return fmt.Errorf("failed to read file header: %v", err)
+	}
+	
+	// Reset file position
+	_, err = srcFile.Seek(0, 0)
+	if err != nil {
+		return fmt.Errorf("failed to reset file position: %v", err)
+	}
+	
+	// Verify magic header
+	if string(header) != "PAR1" {
+		return fmt.Errorf("invalid file format: the file is not a valid Parquet file")
+	}
+	
+	// Create Parquet reader
+	reader := parquet.NewReader(srcFile)
+	if reader == nil {
+		return fmt.Errorf("failed to create parquet reader")
+	}
 	defer reader.Close()
-
-	// Get the total number of rows in the file
+	
+	// Get total row count
 	totalRows := reader.NumRows()
 	if totalRows == 0 {
-		return fmt.Errorf("file is empty, no need to split")
+		return fmt.Errorf("file contains no rows, no need to split")
 	}
-
-	// Calculate the number of rows for each file
+	
+	// Calculate rows per output file
 	rowsPerFile := int64(math.Ceil(float64(totalRows) / float64(numFiles)))
-
-	// Prepare output file names
+	
+	// Prepare file name components
 	baseName := filepath.Base(filePath)
 	ext := filepath.Ext(baseName)
 	baseName = strings.TrimSuffix(baseName, ext)
 	dir := filepath.Dir(filePath)
-
-	// Get the Schema
+	
+	// Get source file schema
 	schema := reader.Schema()
-
-	// Read all data
-	allRows := make([]map[string]interface{}, totalRows)
-	rowBuf := make([]parquet.Row, totalRows)
-	
-	// Reset position to the beginning
-	if err := reader.SeekToRow(0); err != nil {
-		return fmt.Errorf("failed to seek to the beginning: %v", err)
-	}
-	
-	// Read all rows
-	count, err := reader.ReadRows(rowBuf)
-	if err != nil && err != io.EOF {
-		return fmt.Errorf("failed to read data: %v", err)
-	}
-	
-	// Convert to map format
-	for i := 0; i < count; i++ {
-		row := make(map[string]interface{})
-		if err := reader.Schema().Reconstruct(&row, rowBuf[i]); err != nil {
-			return fmt.Errorf("failed to convert row data: %v", err)
-		}
-		allRows[i] = row
-	}
 	
 	// Split data into multiple files
 	for i := 0; i < numFiles; i++ {
 		startRow := int64(i) * rowsPerFile
 		
-		// If the starting row exceeds the total number of rows, exit the loop
-		if startRow >= int64(count) {
+		// Exit loop if we've processed all rows
+		if startRow >= totalRows {
 			break
 		}
 		
-		// Calculate the number of rows this slice should contain
+		// Calculate how many rows should be in this slice
 		endRow := startRow + rowsPerFile
-		if endRow > int64(count) {
-			endRow = int64(count)
+		if endRow > totalRows {
+			endRow = totalRows
 		}
 		
-		// Create the output file
+		// Create output file
 		outputPath := filepath.Join(dir, fmt.Sprintf("%s_%d%s", baseName, i+1, ext))
 		outputFile, err := os.Create(outputPath)
 		if err != nil {
 			return fmt.Errorf("failed to create output file %s: %v", outputPath, err)
 		}
 		
-		// Create the Parquet writer
+		// Seek to starting row in source file
+		if err := reader.SeekToRow(startRow); err != nil {
+			outputFile.Close()
+			return fmt.Errorf("failed to seek to row %d: %v", startRow, err)
+		}
+		
+		// Create writer with same schema
 		writer := parquet.NewWriter(outputFile, schema)
 		
-		// Write the specified number of rows
-		for j := startRow; j < endRow; j++ {
-			// Write one row of data
-			if err := writer.Write(allRows[j]); err != nil {
+		// Process rows in batches
+		rowsToWrite := endRow - startRow
+		rowCount := int64(0)
+		rowBuf := make([]parquet.Row, 100) // Buffer for batch processing
+		
+		// Read and write rows in batches
+		for rowCount < rowsToWrite {
+			// Calculate batch size
+			batchSize := rowsToWrite - rowCount
+			if batchSize > 100 {
+				batchSize = 100
+			}
+			
+			// Read a batch of rows
+			n, err := reader.ReadRows(rowBuf[:batchSize])
+			if err != nil && err != io.EOF {
 				outputFile.Close()
-				return fmt.Errorf("failed to write row: %v", err)
+				return fmt.Errorf("failed to read rows: %v", err)
+			}
+			
+			if n == 0 {
+				break // No more rows to read
+			}
+			
+			// Convert Parquet rows to Go objects before writing to avoid encoding issues
+			for i := 0; i < n; i++ {
+				// Convert row to map
+				row := make(map[string]interface{})
+				if err := reader.Schema().Reconstruct(&row, rowBuf[i]); err != nil {
+					outputFile.Close()
+					writer.Close()
+					return fmt.Errorf("failed to convert row data: %v", err)
+				}
+				
+				// Write converted object
+				if err := writer.Write(row); err != nil {
+					outputFile.Close()
+					writer.Close()
+					return fmt.Errorf("failed to write row: %v", err)
+				}
+			}
+			
+			rowCount += int64(n)
+			
+			if err == io.EOF {
+				break
 			}
 		}
 		
-		// Complete writing and close the file
+		// Ensure all data is written and close writer
 		if err := writer.Close(); err != nil {
 			outputFile.Close()
 			return fmt.Errorf("failed to close writer: %v", err)
 		}
 		
+		// Close output file
 		if err := outputFile.Close(); err != nil {
 			return fmt.Errorf("failed to close output file: %v", err)
 		}
 	}
-
+	
+	// Successfully split the file
+	fmt.Printf("Successfully split file %s into %d files\n", filePath, numFiles)
 	return nil
-} 
+}

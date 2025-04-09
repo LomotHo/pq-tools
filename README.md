@@ -8,7 +8,7 @@ PQ-Tools is a simple and easy-to-use Parquet file processing toolkit that allows
 - `pq tail` - Display the last few rows of a Parquet file
 - `pq cat` - Display all rows in a Parquet file
 - `pq wc` - Count the number of rows in a Parquet file
-- `pq split` - Split a Parquet file into multiple smaller files
+- `pq split` - Split a Parquet file into multiple smaller files (**Note: Has known issues with INT64 encoding in some files**)
 - `pq schema` - Display the schema of a Parquet file
 - `pq generate` - Generate a test Parquet file with custom schema
 
@@ -74,6 +74,8 @@ pq wc -l data.parquet
 
 ### Split files
 
+**Note: The split functionality has known issues with some Parquet files, particularly those containing INT64 fields.**
+
 ```bash
 # Split into 2 files by default
 pq split data.parquet
@@ -91,6 +93,10 @@ pq generate output.parquet
 # Generate a test file with custom schema and 1000 rows
 pq generate output.parquet -r 1000 -s '{"id":"INT64","name":"UTF8","age":"INT32","score":"DOUBLE","active":"BOOLEAN"}'
 ```
+
+## Known Issues
+
+1. **Split Command**: The `split` command may fail with an error "encoding parquet data page: encoding not supported for type INT64" when processing certain Parquet files with INT64 fields.
 
 ## Dependencies
 

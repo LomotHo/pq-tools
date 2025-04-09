@@ -15,30 +15,30 @@ var catCmd = &cobra.Command{
 	Long:  `Print all rows in a parquet file in a human-readable format.`,
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		// 设置信号处理，忽略 SIGPIPE
+		// Set up signal handling, ignore SIGPIPE
 		signal.Ignore(syscall.SIGPIPE)
 		
-		reader, err := parquet.NewParquetReader(args[0])
+		reader, err := handleParquetReader(args[0])
 		if err != nil {
-			return fmt.Errorf("failed to create parquet reader: %w", err)
+			return err
 		}
-		defer reader.Close()
+		defer safeClose(reader)
 
-		// 获取总行数
+		// Get total row count
 		total, err := reader.Count()
 		if err != nil {
-			return fmt.Errorf("failed to get row count: %w", err)
+			return handleRowsError(err)
 		}
 
 		rows, err := reader.Head(int(total))
 		if err != nil {
-			return fmt.Errorf("failed to read rows: %w", err)
+			return handleRowsError(err)
 		}
 
-		// 使用 PrintJSON 打印所有行，设置 pretty 为 false，输出单行 JSON
+		// Use PrintJSON to print all rows, set pretty to false for single-line JSON
 		err = parquet.PrintJSON(rows, os.Stdout, false)
 		if err != nil {
-			// 检查是否是 broken pipe 错误，如果是则不返回错误
+			// Check for broken pipe error, if so, don't return error
 			if pathErr, ok := err.(*os.PathError); ok && pathErr.Err == syscall.EPIPE {
 				return nil
 			}

@@ -28,17 +28,17 @@ var headCmd = &cobra.Command{
 		pretty, _ := cmd.Flags().GetBool("pretty")
 
 		// Create Parquet reader
-		reader, err := parquet.NewParquetReader(filePath)
+		reader, err := handleParquetReader(filePath)
 		if err != nil {
-			er(fmt.Sprintf("Failed to read file: %v", err))
+			er(err.Error())
 			return
 		}
-		defer reader.Close()
+		defer safeClose(reader)
 
 		// Read the first n rows
 		rows, err := reader.Head(n)
 		if err != nil {
-			er(fmt.Sprintf("Failed to read data: %v", err))
+			er(handleRowsError(err).Error())
 			return
 		}
 
