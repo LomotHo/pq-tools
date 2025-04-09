@@ -25,8 +25,8 @@ func NewParquetReader(filepath string) (*ParquetReader, error) {
 		return nil, fmt.Errorf("failed to open file: %v", err)
 	}
 
-	// 检查文件是否为 Parquet 格式
-	// Parquet 文件的魔术头部是 "PAR1"
+	// Check if the file is in Parquet format
+	// Parquet files have "PAR1" magic header
 	header := make([]byte, 4)
 	_, err = file.Read(header)
 	if err != nil {
@@ -34,35 +34,74 @@ func NewParquetReader(filepath string) (*ParquetReader, error) {
 		return nil, fmt.Errorf("failed to read file header: %v", err)
 	}
 
-	// 将文件指针重置回开始位置
+	// Reset file pointer to beginning
 	_, err = file.Seek(0, 0)
 	if err != nil {
 		file.Close()
 		return nil, fmt.Errorf("failed to reset file position: %v", err)
 	}
 
-	// 检查魔术头部，非 Parquet 文件给出友好错误
+	// Check magic header, provide friendly error for non-Parquet files
 	if string(header) != "PAR1" {
 		file.Close()
 		return nil, fmt.Errorf("invalid file format: the file is not a valid Parquet file")
 	}
 
+	// Check file size to ensure integrity
+	fileInfo, err := file.Stat()
+	if err != nil {
+		file.Close()
+		return nil, fmt.Errorf("failed to get file info: %v", err)
+	}
+	
+	// File is too small to be a valid Parquet file
+	if fileInfo.Size() < 12 { // PAR1 + footer + PAR1
+		file.Close()
+		return nil, fmt.Errorf("file is too small to be a valid Parquet file, it might be corrupted")
+	}
+	
 	// Create Parquet reader
 	var reader *parquet.Reader
+	var readErr error
+	
+	// Use defer/recover to catch all possible panics
 	defer func() {
 		if r := recover(); r != nil {
 			file.Close()
-			err = fmt.Errorf("failed to create Parquet reader: %v, the file might be corrupted or not a valid Parquet file", r)
+			err = fmt.Errorf("failed to create Parquet reader: the file might be corrupted or not a valid Parquet file")
 		}
 	}()
 	
 	reader = parquet.NewReader(file)
-	if err != nil {
+	if readErr != nil {
 		file.Close()
-		return nil, err
+		return nil, fmt.Errorf("error reading Parquet file: the file might be corrupted")
 	}
 	
-	rowNum := reader.NumRows()
+	// Check if reader is nil
+	if reader == nil {
+		file.Close()
+		return nil, fmt.Errorf("failed to create Parquet reader: the file might be corrupted")
+	}
+	
+	// Safely get row count
+	var rowNum int64
+	rowNumErr := func() error {
+		defer func() {
+			if r := recover(); r != nil {
+				rowNum = 0
+				return
+			}
+		}()
+		rowNum = reader.NumRows()
+		return nil
+	}()
+	
+	if rowNumErr != nil {
+		reader.Close()
+		file.Close()
+		return nil, fmt.Errorf("failed to read row count: the file might be corrupted")
+	}
 
 	return &ParquetReader{
 		reader: reader,
@@ -73,6 +112,11 @@ func NewParquetReader(filepath string) (*ParquetReader, error) {
 
 // Head returns the first n rows of the file
 func (r *ParquetReader) Head(n int) ([]map[string]interface{}, error) {
+	// Defensive programming: check if r and r.reader are nil
+	if r == nil || r.reader == nil {
+		return nil, fmt.Errorf("invalid reader: reader is not initialized properly")
+	}
+	
 	if r.rowNum == 0 {
 		return nil, fmt.Errorf("file is empty")
 	}
@@ -81,6 +125,13 @@ func (r *ParquetReader) Head(n int) ([]map[string]interface{}, error) {
 	if int64(n) > r.rowNum {
 		n = int(r.rowNum)
 	}
+
+	// Use recover to catch potential panics
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Fprintf(os.Stderr, "Error reading Parquet file: %v\n", r)
+		}
+	}()
 
 	// Reset to the beginning of the file
 	if err := r.reader.SeekToRow(0); err != nil {
@@ -110,6 +161,11 @@ func (r *ParquetReader) Head(n int) ([]map[string]interface{}, error) {
 
 // Tail returns the last n rows of the file
 func (r *ParquetReader) Tail(n int) ([]map[string]interface{}, error) {
+	// Defensive programming: check if r and r.reader are nil
+	if r == nil || r.reader == nil {
+		return nil, fmt.Errorf("invalid reader: reader is not initialized properly")
+	}
+	
 	if r.rowNum == 0 {
 		return nil, fmt.Errorf("file is empty")
 	}
@@ -118,6 +174,13 @@ func (r *ParquetReader) Tail(n int) ([]map[string]interface{}, error) {
 	if int64(n) > r.rowNum {
 		n = int(r.rowNum)
 	}
+
+	// Use recover to catch potential panics
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Fprintf(os.Stderr, "Error reading Parquet file: %v\n", r)
+		}
+	}()
 
 	// Determine which row to start reading from
 	startRow := r.rowNum - int64(n)
@@ -153,27 +216,67 @@ func (r *ParquetReader) Tail(n int) ([]map[string]interface{}, error) {
 
 // Count returns the total number of rows in the file
 func (r *ParquetReader) Count() (int64, error) {
+	// Defensive programming: check if r is nil
+	if r == nil {
+		return 0, fmt.Errorf("invalid reader: reader is not initialized properly")
+	}
 	return r.rowNum, nil
 }
 
 // Close closes the reader
 func (r *ParquetReader) Close() error {
-	if err := r.reader.Close(); err != nil {
-		return err
+	// Defensive programming: check if r is nil
+	if r == nil {
+		return nil
 	}
-	return r.file.Close()
+	
+	var err error
+	if r.reader != nil {
+		err = r.reader.Close()
+	}
+	
+	if r.file != nil {
+		if fileErr := r.file.Close(); fileErr != nil && err == nil {
+			err = fileErr
+		}
+	}
+	
+	return err
 }
 
 // GetSchema retrieves the schema information of the Parquet file
 func (r *ParquetReader) GetSchema() (string, error) {
-	schema := r.reader.Schema()
+	// Defensive programming: check if r and r.reader are nil
+	if r == nil || r.reader == nil {
+		return "", fmt.Errorf("invalid reader: reader is not initialized properly")
+	}
+	
+	// Use recover to catch potential panics
+	var schemaStr string
+	var err error
+	
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				err = fmt.Errorf("error retrieving schema: %v", r)
+			}
+		}()
+		schema := r.reader.Schema()
+		if schema != nil {
+			schemaStr = schema.String()
+		} else {
+			err = fmt.Errorf("failed to get schema: schema is nil")
+		}
+	}()
+	
+	if err != nil {
+		return "", err
+	}
 	
 	// Build detailed schema information
 	result := fmt.Sprintf("File contains %d rows of data\n", r.rowNum)
 	result += "Schema elements (fields):\n"
-	
-	// Use a more friendly format to display the schema
-	result += schema.String()
+	result += schemaStr
 	
 	return result, nil
 }
@@ -189,7 +292,7 @@ func PrintJSON(data []map[string]interface{}, w io.Writer, pretty bool) error {
 	
 	for _, row := range data {
 		if err := encoder.Encode(row); err != nil {
-			// 检查是否是 broken pipe 错误，如果是则停止写入但不返回错误
+			// Check for broken pipe error, stop writing but don't return error
 			if pathErr, ok := err.(*os.PathError); ok && (pathErr.Err == syscall.EPIPE || pathErr.Err.Error() == "broken pipe") {
 				return nil
 			}

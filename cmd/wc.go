@@ -2,8 +2,6 @@ package cmd
 
 import (
 	"fmt"
-	"github.com/LomotHo/pq-tools/pkg/parquet"
-
 	"github.com/spf13/cobra"
 )
 
@@ -20,17 +18,17 @@ var wcCmd = &cobra.Command{
 		linesOnly, _ := cmd.Flags().GetBool("l")
 
 		// Create Parquet reader
-		reader, err := parquet.NewParquetReader(filePath)
+		reader, err := handleParquetReader(filePath)
 		if err != nil {
-			er(fmt.Sprintf("Failed to read file: %v", err))
+			er(err.Error())
 			return
 		}
-		defer reader.Close()
+		defer safeClose(reader)
 
 		// Get the row count
 		count, err := reader.Count()
 		if err != nil {
-			er(fmt.Sprintf("Failed to count rows: %v", err))
+			er(handleRowsError(err).Error())
 			return
 		}
 

@@ -26,7 +26,7 @@ var splitCmd = &cobra.Command{
 
 		// Execute the split
 		if err := parquet.SplitParquetFile(filePath, n); err != nil {
-			er(fmt.Sprintf("Failed to split file: %v", err))
+			er(handleSplitError(err).Error())
 			return
 		}
 
