@@ -5,16 +5,16 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/xitongsys/parquet-go-source/local"
-	"github.com/xitongsys/parquet-go/writer"
+	"github.com/parquet-go/parquet-go"
 )
 
 // 用于测试的简单结构体
 type TestUser struct {
-	Name   string `parquet:"name=name, type=BYTE_ARRAY, convertedtype=UTF8"`
-	Age    int32  `parquet:"name=age, type=INT32"`
-	ID     int64  `parquet:"name=id, type=INT64"`
-	Weight float32 `parquet:"name=weight, type=FLOAT"`
+	Name   string  `parquet:"name=name"`
+	Age    int32   `parquet:"name=age"`
+	ID     int64   `parquet:"name=id"`
+	Weight float32 `parquet:"name=weight"`
+	Active bool    `parquet:"name=active"`
 }
 
 // 创建测试用的parquet文件
@@ -28,17 +28,14 @@ func createTestParquetFile(t *testing.T) string {
 	filePath := filepath.Join(tempDir, "test.parquet")
 	
 	// 创建parquet文件
-	fw, err := local.NewLocalFileWriter(filePath)
+	file, err := os.Create(filePath)
 	if err != nil {
 		t.Fatalf("无法创建文件: %v", err)
 	}
-	defer fw.Close()
+	defer file.Close()
 
 	// 创建写入器
-	pw, err := writer.NewParquetWriter(fw, new(TestUser), 4)
-	if err != nil {
-		t.Fatalf("无法创建Parquet写入器: %v", err)
-	}
+	writer := parquet.NewWriter(file)
 
 	// 写入测试数据
 	for i := 0; i < 100; i++ {
@@ -47,13 +44,14 @@ func createTestParquetFile(t *testing.T) string {
 			Age:    int32(20 + i%5),
 			ID:     int64(i),
 			Weight: float32(50.0 + float32(i)*0.1),
+			Active: i%2 == 0,
 		}
-		if err := pw.Write(user); err != nil {
+		if err := writer.Write(&user); err != nil {
 			t.Fatalf("写入数据失败: %v", err)
 		}
 	}
 
-	if err := pw.WriteStop(); err != nil {
+	if err := writer.Close(); err != nil {
 		t.Fatalf("完成写入失败: %v", err)
 	}
 
@@ -155,7 +153,10 @@ func TestCount(t *testing.T) {
 	defer reader.Close()
 
 	// 测试行数计算
-	count := reader.Count()
+	count, err := reader.Count()
+	if err != nil {
+		t.Fatalf("计算行数失败: %v", err)
+	}
 	if count != 100 {
 		t.Errorf("期望行数为100，实际为%d", count)
 	}

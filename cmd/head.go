@@ -25,6 +25,9 @@ var headCmd = &cobra.Command{
 			n = 10 // 如果解析失败，默认显示10行
 		}
 
+		// 获取格式化选项
+		pretty, _ := cmd.Flags().GetBool("pretty")
+
 		// 创建parquet读取器
 		reader, err := parquet.NewParquetReader(filePath)
 		if err != nil {
@@ -41,7 +44,7 @@ var headCmd = &cobra.Command{
 		}
 
 		// 打印结果
-		if err := parquet.PrintJSON(rows, os.Stdout); err != nil {
+		if err := parquet.PrintJSON(rows, os.Stdout, pretty); err != nil {
 			er(fmt.Sprintf("打印数据失败: %v", err))
 		}
 	},
@@ -50,4 +53,5 @@ var headCmd = &cobra.Command{
 func init() {
 	rootCmd.AddCommand(headCmd)
 	headCmd.Flags().StringP("n", "n", "10", "要显示的行数")
+	headCmd.Flags().BoolP("pretty", "p", false, "使用格式化输出（每条记录多行）")
 } 

@@ -79,4 +79,4 @@ pq generate output.parquet -r 1000 -s '{"id":"INT64","name":"UTF8","age":"INT32"
 ## Dependencies
 
 - [cobra](https://github.com/spf13/cobra) - Command-line interface framework
-- [parquet-go](https://github.com/xitongsys/parquet-go) - Parquet format processing library for Go
+- [parquet-go](https://github.com/parquet-go/parquet-go) - Parquet format processing library for Go

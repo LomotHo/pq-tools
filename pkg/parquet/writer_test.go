@@ -1,11 +1,9 @@
 package parquet
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
-
-	"github.com/xitongsys/parquet-go-source/local"
-	"github.com/xitongsys/parquet-go/reader"
 )
 
 func TestSplitParquetFile(t *testing.T) {
@@ -27,40 +25,39 @@ func TestSplitParquetFile(t *testing.T) {
 
 	// 验证第一个分割文件
 	file1 := filepath.Join(dir, baseName+"_1"+ext)
-	fr1, err := local.NewLocalFileReader(file1)
-	if err != nil {
-		t.Fatalf("无法打开分割文件1: %v", err)
-	}
-	defer fr1.Close()
 	
-	pr1, err := reader.NewParquetReader(fr1, nil, 4)
+	// 使用我们的ParquetReader来检查文件
+	pr1, err := NewParquetReader(file1)
 	if err != nil {
 		t.Fatalf("无法创建分割文件1的读取器: %v", err)
 	}
-	defer pr1.ReadStop()
+	defer pr1.Close()
 	
 	// 检查行数，应该是50行（总共100行分成2份）
-	if pr1.GetNumRows() != 50 {
-		t.Errorf("期望第一个文件有50行数据，实际有%d行", pr1.GetNumRows())
+	count1, err := pr1.Count()
+	if err != nil {
+		t.Fatalf("获取分割文件1的行数失败: %v", err)
+	}
+	if count1 != 50 {
+		t.Errorf("期望第一个文件有50行数据，实际有%d行", count1)
 	}
 
 	// 验证第二个分割文件
 	file2 := filepath.Join(dir, baseName+"_2"+ext)
-	fr2, err := local.NewLocalFileReader(file2)
-	if err != nil {
-		t.Fatalf("无法打开分割文件2: %v", err)
-	}
-	defer fr2.Close()
 	
-	pr2, err := reader.NewParquetReader(fr2, nil, 4)
+	pr2, err := NewParquetReader(file2)
 	if err != nil {
 		t.Fatalf("无法创建分割文件2的读取器: %v", err)
 	}
-	defer pr2.ReadStop()
+	defer pr2.Close()
 	
 	// 检查行数，应该是50行（总共100行分成2份）
-	if pr2.GetNumRows() != 50 {
-		t.Errorf("期望第二个文件有50行数据，实际有%d行", pr2.GetNumRows())
+	count2, err := pr2.Count()
+	if err != nil {
+		t.Fatalf("获取分割文件2的行数失败: %v", err)
+	}
+	if count2 != 50 {
+		t.Errorf("期望第二个文件有50行数据，实际有%d行", count2)
 	}
 
 	// 测试拆分成3个文件
@@ -71,42 +68,43 @@ func TestSplitParquetFile(t *testing.T) {
 
 	// 验证第一个分割文件（3份）
 	file1 = filepath.Join(dir, baseName+"_1"+ext)
-	fr1, err = local.NewLocalFileReader(file1)
-	if err != nil {
-		t.Fatalf("无法打开分割文件1: %v", err)
-	}
-	defer fr1.Close()
 	
-	pr1, err = reader.NewParquetReader(fr1, nil, 4)
+	pr1, err = NewParquetReader(file1)
 	if err != nil {
 		t.Fatalf("无法创建分割文件1的读取器: %v", err)
 	}
-	defer pr1.ReadStop()
+	defer pr1.Close()
 	
-	// 检查行数，应该是34行左右（总共100行分成3份）
+	// 检查行数，应该是33或34行左右（总共100行分成3份）
+	count1, err = pr1.Count()
+	if err != nil {
+		t.Fatalf("获取分割文件1的行数失败: %v", err)
+	}
 	expectedRows := int64(34)
-	if pr1.GetNumRows() != expectedRows {
-		t.Errorf("期望第一个文件有%d行数据，实际有%d行", expectedRows, pr1.GetNumRows())
+	if count1 != expectedRows {
+		t.Errorf("期望第一个文件有%d行数据，实际有%d行", expectedRows, count1)
 	}
 
 	// 验证文件总行数是否匹配原始文件
 	totalRows := int64(0)
 	for i := 1; i <= 3; i++ {
 		fileN := filepath.Join(dir, baseName+"_"+string(rune(i+48))+ext)
-		frN, err := local.NewLocalFileReader(fileN)
-		if err != nil {
-			t.Logf("文件%d不存在，跳过: %v", i, err)
+		if _, err := os.Stat(fileN); os.IsNotExist(err) {
+			t.Logf("文件%d不存在，跳过", i)
 			continue
 		}
-		defer frN.Close()
 		
-		prN, err := reader.NewParquetReader(frN, nil, 4)
+		prN, err := NewParquetReader(fileN)
 		if err != nil {
 			t.Fatalf("无法创建分割文件%d的读取器: %v", i, err)
 		}
-		defer prN.ReadStop()
+		defer prN.Close()
 		
-		totalRows += prN.GetNumRows()
+		countN, err := prN.Count()
+		if err != nil {
+			t.Fatalf("获取分割文件%d的行数失败: %v", i, err)
+		}
+		totalRows += countN
 	}
 	
 	if totalRows != 100 {
