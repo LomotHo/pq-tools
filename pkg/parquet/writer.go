@@ -1,184 +1,113 @@
 package parquet
 
 import (
-	"encoding/json"
 	"fmt"
+	"io"
 	"math"
+	"os"
 	"path/filepath"
 	"strings"
 
-	"github.com/xitongsys/parquet-go-source/local"
-	parquetreader "github.com/xitongsys/parquet-go/reader"
-	"github.com/xitongsys/parquet-go/writer"
+	"github.com/parquet-go/parquet-go"
 )
 
-// 将接口数组转换为map数组 (写入模块专用版本)
-func convertDataToMaps(data []interface{}) ([]map[string]interface{}, error) {
-	result := make([]map[string]interface{}, len(data))
-	
-	for i, item := range data {
-		// 先将数据序列化为JSON，再反序列化为map
-		jsonBytes, err := json.Marshal(item)
-		if err != nil {
-			return nil, fmt.Errorf("序列化数据失败: %v", err)
-		}
-		
-		var mapData map[string]interface{}
-		if err := json.Unmarshal(jsonBytes, &mapData); err != nil {
-			return nil, fmt.Errorf("反序列化数据失败: %v", err)
-		}
-		
-		// 直接使用原始字段名
-		// parquet-go 在读取后已经保持了原始的字段名
-		result[i] = mapData
-	}
-	
-	return result, nil
-}
-
-// SplitParquetFile 将parquet文件拆分成多个小文件
+// SplitParquetFile splits a Parquet file into multiple smaller files
 func SplitParquetFile(filePath string, numFiles int) error {
-	// 创建reader
-	reader, err := NewParquetReader(filePath)
+	// Open the original file
+	f, err := os.Open(filePath)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to open file: %v", err)
 	}
+	defer f.Close()
+
+	// Parse the Parquet file
+	reader := parquet.NewReader(f)
 	defer reader.Close()
 
-	// 获取文件总行数
-	totalRows := reader.Count()
+	// Get the total number of rows in the file
+	totalRows := reader.NumRows()
 	if totalRows == 0 {
-		return fmt.Errorf("文件为空，无需拆分")
+		return fmt.Errorf("file is empty, no need to split")
 	}
 
-	// 计算每个文件的行数
-	rowsPerFile := int(math.Ceil(float64(totalRows) / float64(numFiles)))
+	// Calculate the number of rows for each file
+	rowsPerFile := int64(math.Ceil(float64(totalRows) / float64(numFiles)))
 
-	// 准备输出文件名
+	// Prepare output file names
 	baseName := filepath.Base(filePath)
 	ext := filepath.Ext(baseName)
 	baseName = strings.TrimSuffix(baseName, ext)
 	dir := filepath.Dir(filePath)
 
-	// 创建一个新的读取器来读取所有数据
-	fr, err := local.NewLocalFileReader(filePath)
-	if err != nil {
-		return fmt.Errorf("无法重新打开文件: %v", err)
-	}
-	defer fr.Close()
+	// Get the Schema
+	schema := reader.Schema()
+
+	// Read all data
+	allRows := make([]map[string]interface{}, totalRows)
+	rowBuf := make([]parquet.Row, totalRows)
 	
-	// 使用nil作为schema，自动适应任何parquet文件格式
-	newReader, err := parquetreader.NewParquetReader(fr, nil, 4)
-	if err != nil {
-		return fmt.Errorf("无法创建新的Parquet读取器: %v", err)
-	}
-	defer newReader.ReadStop()
-
-	// 使用 ReadByNumber 读取所有数据
-	rawData, err := newReader.ReadByNumber(int(totalRows))
-	if err != nil {
-		return fmt.Errorf("读取数据失败: %v", err)
-	}
-
-	// 将数据转换为 []map[string]interface{}
-	allData, err := convertDataToMaps(rawData)
-	if err != nil {
-		return fmt.Errorf("转换数据失败: %v", err)
-	}
-
-	// 拆分数据并写入多个文件
-	for i := 0; i < numFiles && i*rowsPerFile < len(allData); i++ {
-		// 计算当前分片的开始和结束索引
-		startIdx := i * rowsPerFile
-		endIdx := (i + 1) * rowsPerFile
-		if endIdx > len(allData) {
-			endIdx = len(allData)
-		}
-		
-		// 提取当前分片数据
-		currentPartData := allData[startIdx:endIdx]
-		
-		// 创建输出文件
-		outputFile := filepath.Join(dir, fmt.Sprintf("%s_%d%s", baseName, i+1, ext))
-		
-		// 写入分片文件
-		if err := writeParquetFile(outputFile, currentPartData); err != nil {
-			return fmt.Errorf("写入分片文件 %s 失败: %v", outputFile, err)
-		}
-	}
-
-	return nil
-}
-
-// writeParquetFile 将数据写入parquet文件
-func writeParquetFile(filePath string, data []map[string]interface{}) error {
-	if len(data) == 0 {
-		return fmt.Errorf("没有数据可写入")
-	}
-
-	// 创建文件
-	fw, err := local.NewLocalFileWriter(filePath)
-	if err != nil {
-		return fmt.Errorf("无法创建输出文件: %v", err)
-	}
-	defer fw.Close()
-
-	// 从第一行数据构建schema
-	schemaStr := "{"
-	schemaStr += "\"Tag\":\"name=parquet-go-root\","
-	schemaStr += "\"Fields\":["
-	
-	firstItem := true
-	for key, val := range data[0] {
-		if !firstItem {
-			schemaStr += ","
-		}
-		firstItem = false
-		
-		// 根据值类型设置字段类型
-		parquetType := "BYTE_ARRAY"
-		convertedType := "UTF8"
-		
-		switch val.(type) {
-		case int, int32, int64:
-			parquetType = "INT64"
-			convertedType = ""
-		case float32, float64:
-			parquetType = "DOUBLE"
-			convertedType = ""
-		case bool:
-			parquetType = "BOOLEAN"
-			convertedType = ""
-		}
-		
-		fieldSchema := fmt.Sprintf("{\"Tag\":\"name=%s, type=%s", key, parquetType)
-		if convertedType != "" {
-			fieldSchema += fmt.Sprintf(", convertedtype=%s", convertedType)
-		}
-		fieldSchema += "\"}"
-		
-		schemaStr += fieldSchema
+	// Reset position to the beginning
+	if err := reader.SeekToRow(0); err != nil {
+		return fmt.Errorf("failed to seek to the beginning: %v", err)
 	}
 	
-	schemaStr += "]}"
-
-	// 创建JSON写入器
-	pw, err := writer.NewJSONWriter(schemaStr, fw, 4)
-	if err != nil {
-		return fmt.Errorf("无法创建Parquet写入器: %v", err)
+	// Read all rows
+	count, err := reader.ReadRows(rowBuf)
+	if err != nil && err != io.EOF {
+		return fmt.Errorf("failed to read data: %v", err)
 	}
-	defer pw.WriteStop()
-
-	// 写入数据
-	for _, row := range data {
-		// 转换为JSON字符串
-		jsonData, err := json.Marshal(row)
+	
+	// Convert to map format
+	for i := 0; i < count; i++ {
+		row := make(map[string]interface{})
+		if err := reader.Schema().Reconstruct(&row, rowBuf[i]); err != nil {
+			return fmt.Errorf("failed to convert row data: %v", err)
+		}
+		allRows[i] = row
+	}
+	
+	// Split data into multiple files
+	for i := 0; i < numFiles; i++ {
+		startRow := int64(i) * rowsPerFile
+		
+		// If the starting row exceeds the total number of rows, exit the loop
+		if startRow >= int64(count) {
+			break
+		}
+		
+		// Calculate the number of rows this slice should contain
+		endRow := startRow + rowsPerFile
+		if endRow > int64(count) {
+			endRow = int64(count)
+		}
+		
+		// Create the output file
+		outputPath := filepath.Join(dir, fmt.Sprintf("%s_%d%s", baseName, i+1, ext))
+		outputFile, err := os.Create(outputPath)
 		if err != nil {
-			return fmt.Errorf("序列化行数据失败: %v", err)
+			return fmt.Errorf("failed to create output file %s: %v", outputPath, err)
 		}
 		
-		if err := pw.Write(string(jsonData)); err != nil {
-			return fmt.Errorf("写入行数据失败: %v", err)
+		// Create the Parquet writer
+		writer := parquet.NewWriter(outputFile, schema)
+		
+		// Write the specified number of rows
+		for j := startRow; j < endRow; j++ {
+			// Write one row of data
+			if err := writer.Write(allRows[j]); err != nil {
+				outputFile.Close()
+				return fmt.Errorf("failed to write row: %v", err)
+			}
+		}
+		
+		// Complete writing and close the file
+		if err := writer.Close(); err != nil {
+			outputFile.Close()
+			return fmt.Errorf("failed to close writer: %v", err)
+		}
+		
+		if err := outputFile.Close(); err != nil {
+			return fmt.Errorf("failed to close output file: %v", err)
 		}
 	}
 

@@ -1,115 +1,113 @@
 package parquet
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
-
-	"github.com/xitongsys/parquet-go-source/local"
-	"github.com/xitongsys/parquet-go/reader"
 )
 
 func TestSplitParquetFile(t *testing.T) {
-	// 创建测试文件
+	// Create test file
 	filePath := createTestParquetFile(t)
 	defer cleanupTestFile(filePath)
 
-	// 拆分成2个文件
+	// Split into 2 files
 	err := SplitParquetFile(filePath, 2)
 	if err != nil {
-		t.Fatalf("拆分文件失败: %v", err)
+		t.Fatalf("Failed to split file: %v", err)
 	}
 
-	// 检查生成的文件
+	// Check generated files
 	dir := filepath.Dir(filePath)
 	baseName := filepath.Base(filePath)
 	ext := filepath.Ext(baseName)
 	baseName = baseName[:len(baseName)-len(ext)]
 
-	// 验证第一个分割文件
+	// Verify the first split file
 	file1 := filepath.Join(dir, baseName+"_1"+ext)
-	fr1, err := local.NewLocalFileReader(file1)
-	if err != nil {
-		t.Fatalf("无法打开分割文件1: %v", err)
-	}
-	defer fr1.Close()
 	
-	pr1, err := reader.NewParquetReader(fr1, nil, 4)
+	// Use our ParquetReader to check the file
+	pr1, err := NewParquetReader(file1)
 	if err != nil {
-		t.Fatalf("无法创建分割文件1的读取器: %v", err)
+		t.Fatalf("Failed to create reader for split file 1: %v", err)
 	}
-	defer pr1.ReadStop()
+	defer pr1.Close()
 	
-	// 检查行数，应该是50行（总共100行分成2份）
-	if pr1.GetNumRows() != 50 {
-		t.Errorf("期望第一个文件有50行数据，实际有%d行", pr1.GetNumRows())
+	// Check row count, should be 50 rows (total 100 rows split into 2 parts)
+	count1, err := pr1.Count()
+	if err != nil {
+		t.Fatalf("Failed to get row count for split file 1: %v", err)
+	}
+	if count1 != 50 {
+		t.Errorf("Expected the first file to have 50 rows, actual count is %d", count1)
 	}
 
-	// 验证第二个分割文件
+	// Verify the second split file
 	file2 := filepath.Join(dir, baseName+"_2"+ext)
-	fr2, err := local.NewLocalFileReader(file2)
-	if err != nil {
-		t.Fatalf("无法打开分割文件2: %v", err)
-	}
-	defer fr2.Close()
 	
-	pr2, err := reader.NewParquetReader(fr2, nil, 4)
+	pr2, err := NewParquetReader(file2)
 	if err != nil {
-		t.Fatalf("无法创建分割文件2的读取器: %v", err)
+		t.Fatalf("Failed to create reader for split file 2: %v", err)
 	}
-	defer pr2.ReadStop()
+	defer pr2.Close()
 	
-	// 检查行数，应该是50行（总共100行分成2份）
-	if pr2.GetNumRows() != 50 {
-		t.Errorf("期望第二个文件有50行数据，实际有%d行", pr2.GetNumRows())
+	// Check row count, should be 50 rows (total 100 rows split into 2 parts)
+	count2, err := pr2.Count()
+	if err != nil {
+		t.Fatalf("Failed to get row count for split file 2: %v", err)
+	}
+	if count2 != 50 {
+		t.Errorf("Expected the second file to have 50 rows, actual count is %d", count2)
 	}
 
-	// 测试拆分成3个文件
+	// Test splitting into 3 files
 	err = SplitParquetFile(filePath, 3)
 	if err != nil {
-		t.Fatalf("拆分文件为3份失败: %v", err)
+		t.Fatalf("Failed to split file into 3 parts: %v", err)
 	}
 
-	// 验证第一个分割文件（3份）
+	// Verify the first split file (3 parts)
 	file1 = filepath.Join(dir, baseName+"_1"+ext)
-	fr1, err = local.NewLocalFileReader(file1)
-	if err != nil {
-		t.Fatalf("无法打开分割文件1: %v", err)
-	}
-	defer fr1.Close()
 	
-	pr1, err = reader.NewParquetReader(fr1, nil, 4)
+	pr1, err = NewParquetReader(file1)
 	if err != nil {
-		t.Fatalf("无法创建分割文件1的读取器: %v", err)
+		t.Fatalf("Failed to create reader for split file 1: %v", err)
 	}
-	defer pr1.ReadStop()
+	defer pr1.Close()
 	
-	// 检查行数，应该是34行左右（总共100行分成3份）
+	// Check row count, should be around 33 or 34 rows (total 100 rows split into 3 parts)
+	count1, err = pr1.Count()
+	if err != nil {
+		t.Fatalf("Failed to get row count for split file 1: %v", err)
+	}
 	expectedRows := int64(34)
-	if pr1.GetNumRows() != expectedRows {
-		t.Errorf("期望第一个文件有%d行数据，实际有%d行", expectedRows, pr1.GetNumRows())
+	if count1 != expectedRows {
+		t.Errorf("Expected the first file to have %d rows, actual count is %d", expectedRows, count1)
 	}
 
-	// 验证文件总行数是否匹配原始文件
+	// Verify that the total row count matches the original file
 	totalRows := int64(0)
 	for i := 1; i <= 3; i++ {
 		fileN := filepath.Join(dir, baseName+"_"+string(rune(i+48))+ext)
-		frN, err := local.NewLocalFileReader(fileN)
-		if err != nil {
-			t.Logf("文件%d不存在，跳过: %v", i, err)
+		if _, err := os.Stat(fileN); os.IsNotExist(err) {
+			t.Logf("File %d does not exist, skipping", i)
 			continue
 		}
-		defer frN.Close()
 		
-		prN, err := reader.NewParquetReader(frN, nil, 4)
+		prN, err := NewParquetReader(fileN)
 		if err != nil {
-			t.Fatalf("无法创建分割文件%d的读取器: %v", i, err)
+			t.Fatalf("Failed to create reader for split file %d: %v", i, err)
 		}
-		defer prN.ReadStop()
+		defer prN.Close()
 		
-		totalRows += prN.GetNumRows()
+		countN, err := prN.Count()
+		if err != nil {
+			t.Fatalf("Failed to get row count for split file %d: %v", i, err)
+		}
+		totalRows += countN
 	}
 	
 	if totalRows != 100 {
-		t.Errorf("期望总行数为100，实际为%d", totalRows)
+		t.Errorf("Expected total row count to be 100, actual count is %d", totalRows)
 	}
 } 

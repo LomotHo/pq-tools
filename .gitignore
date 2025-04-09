@@ -1,47 +1,47 @@
-# 编译生成的二进制文件
-/pq
+# Compiled binary files
+pq
 *.exe
+*.exe~
 *.dll
 *.so
 *.dylib
 
-# 测试二进制文件和测试生成的文件
+# Test binary files and generated test files
 *.test
-*.prof
 *.out
+coverage.txt
 
-# 依赖管理
-vendor/
+# Dependency management
+go.sum
 
-# IDE和编辑器文件
-.idea/
-.vscode/
+# IDE and editor files
+.idea
+.vscode
 *.swp
 *.swo
-*~
-
-# 操作系统文件
 .DS_Store
-Thumbs.db
 
-# 日志文件
+# OS files
+Thumbs.db
+ehthumbs.db
+
+# Log files
 *.log
 
-# 输出目录
+# Output directories
 bin/
-tmp/
-output/
 dist/
+vendor/
+.tmp/
 
-# Go特定的文件
-*.o
-*.a
+# Go specific files
+*.prof
+*.test
 
-# Parquet文件（用于测试）
+# Parquet files (for testing)
 *.parquet
 
-# 本地开发环境
+# Local development environment
 .env
-.env.local
-
-.tmp
+pq-tools
+pq

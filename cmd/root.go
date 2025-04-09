@@ -10,21 +10,21 @@ import (
 var rootCmd = &cobra.Command{
 	Use:   "pq",
 	Short: "pq is a tool for working with Parquet files",
-	Long: `一个简单易用的Parquet文件处理工具集，
-使得您可以像处理jsonl文件一样处理Parquet文件。
-支持查看头部数据、尾部数据、计算行数以及拆分文件等功能。`,
+	Long: `A simple and easy-to-use Parquet file processing toolkit,
+allowing you to work with Parquet files just like JSONL files.
+Supports viewing header data, tail data, counting rows, and splitting files.`,
 }
 
-// Execute 执行根命令
+// Execute executes the root command
 func Execute() error {
 	return rootCmd.Execute()
 }
 
 func init() {
-	// 这里可以添加全局标志
+	// You can add global flags here
 }
 
 func er(msg interface{}) {
-	fmt.Println("错误:", msg)
+	fmt.Println("Error:", msg)
 	os.Exit(1)
 } 
