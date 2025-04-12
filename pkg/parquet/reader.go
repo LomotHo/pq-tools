@@ -12,9 +12,9 @@ import (
 
 // ParquetReader is a reader for Parquet files
 type ParquetReader struct {
-	reader *parquet.Reader
-	file   *os.File  // Used to close the underlying file
-	rowNum int64
+	genericReader any      // Use dynamic type to hold either *parquet.GenericReader[any] or *parquet.Reader
+	file          *os.File // Used to close the underlying file
+	rowNum        int64
 }
 
 // NewParquetReader creates a new Parquet file reader
@@ -53,70 +53,74 @@ func NewParquetReader(filepath string) (*ParquetReader, error) {
 		file.Close()
 		return nil, fmt.Errorf("failed to get file info: %v", err)
 	}
-	
+
 	// File is too small to be a valid Parquet file
 	if fileInfo.Size() < 12 { // PAR1 + footer + PAR1
 		file.Close()
 		return nil, fmt.Errorf("file is too small to be a valid Parquet file, it might be corrupted")
 	}
-	
-	// Create Parquet reader
-	var reader *parquet.Reader
-	var readErr error
-	
-	// Use defer/recover to catch all possible panics
-	defer func() {
-		if r := recover(); r != nil {
-			file.Close()
-			err = fmt.Errorf("failed to create Parquet reader: the file might be corrupted or not a valid Parquet file")
-		}
-	}()
-	
-	reader = parquet.NewReader(file)
-	if readErr != nil {
-		file.Close()
-		return nil, fmt.Errorf("error reading Parquet file: the file might be corrupted")
-	}
-	
-	// Check if reader is nil
-	if reader == nil {
-		file.Close()
-		return nil, fmt.Errorf("failed to create Parquet reader: the file might be corrupted")
-	}
-	
-	// Safely get row count
+
+	// Try to create reader with error recovery
 	var rowNum int64
-	rowNumErr := func() error {
+	var genericReader any
+
+	err = func() (recErr error) {
 		defer func() {
 			if r := recover(); r != nil {
-				rowNum = 0
-				return
+				recErr = fmt.Errorf("failed to create Parquet reader: %v", r)
 			}
 		}()
+
+		// Try to use the more type-safe GenericReader
+		reader := parquet.NewGenericReader[map[string]interface{}](file)
 		rowNum = reader.NumRows()
+		genericReader = reader
 		return nil
 	}()
-	
-	if rowNumErr != nil {
-		reader.Close()
-		file.Close()
-		return nil, fmt.Errorf("failed to read row count: the file might be corrupted")
+
+	// If GenericReader fails, try the classic Reader as fallback
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: %v, falling back to classic Reader\n", err)
+
+		err = func() (recErr error) {
+			defer func() {
+				if r := recover(); r != nil {
+					recErr = fmt.Errorf("failed to create classic Parquet reader: %v", r)
+				}
+			}()
+
+			// Reset file position
+			_, seekErr := file.Seek(0, 0)
+			if seekErr != nil {
+				return seekErr
+			}
+
+			reader := parquet.NewReader(file)
+			rowNum = reader.NumRows()
+			genericReader = reader
+			return nil
+		}()
+
+		if err != nil {
+			file.Close()
+			return nil, fmt.Errorf("failed to create any Parquet reader: %v", err)
+		}
 	}
 
 	return &ParquetReader{
-		reader: reader,
-		file:   file,
-		rowNum: rowNum,
+		genericReader: genericReader,
+		file:          file,
+		rowNum:        rowNum,
 	}, nil
 }
 
 // Head returns the first n rows of the file
 func (r *ParquetReader) Head(n int) ([]map[string]interface{}, error) {
-	// Defensive programming: check if r and r.reader are nil
-	if r == nil || r.reader == nil {
+	// Defensive programming: check if reader is initialized
+	if r == nil || r.genericReader == nil {
 		return nil, fmt.Errorf("invalid reader: reader is not initialized properly")
 	}
-	
+
 	if r.rowNum == 0 {
 		return nil, fmt.Errorf("file is empty")
 	}
@@ -126,34 +130,83 @@ func (r *ParquetReader) Head(n int) ([]map[string]interface{}, error) {
 		n = int(r.rowNum)
 	}
 
-	// Use recover to catch potential panics
-	defer func() {
-		if r := recover(); r != nil {
-			fmt.Fprintf(os.Stderr, "Error reading Parquet file: %v\n", r)
+	// Use recovery block to handle potential panics
+	var result []map[string]interface{}
+	var err error
+
+	func() {
+		defer func() {
+			if rec := recover(); rec != nil {
+				err = fmt.Errorf("panic while reading rows: %v", rec)
+			}
+		}()
+
+		// Handle different reader types
+		switch reader := r.genericReader.(type) {
+		case *parquet.GenericReader[map[string]interface{}]:
+			// Seek to beginning
+			reader.SeekToRow(0)
+
+			// Read rows with GenericReader
+			rows := make([]map[string]interface{}, n)
+			count, readErr := reader.Read(rows)
+			if readErr != nil && readErr != io.EOF {
+				err = fmt.Errorf("failed to read row data: %v", readErr)
+				return
+			}
+
+			// Take only the rows we actually read
+			result = rows[:count]
+
+		case *parquet.Reader:
+			// Seek to beginning
+			reader.SeekToRow(0)
+
+			// Read rows with classic Reader
+			result = make([]map[string]interface{}, 0, n)
+			rowBuf := make([]parquet.Row, n)
+
+			// Read a batch of rows
+			count, readErr := reader.ReadRows(rowBuf)
+			if readErr != nil && readErr != io.EOF {
+				err = fmt.Errorf("failed to read row data: %v", readErr)
+				return
+			}
+
+			// Process each row
+			for i := 0; i < count; i++ {
+				row := make(map[string]interface{})
+
+				// Safe reconstruction with error handling
+				reconstructErr := func() error {
+					defer func() {
+						if rec := recover(); rec != nil {
+							err = fmt.Errorf("panic during row reconstruction: %v", rec)
+						}
+					}()
+					return reader.Schema().Reconstruct(&row, rowBuf[i])
+				}()
+
+				if reconstructErr != nil {
+					// Skip rows that can't be reconstructed
+					fmt.Fprintf(os.Stderr, "Warning: Skipping row %d due to error: %v\n", i, reconstructErr)
+					continue
+				}
+
+				result = append(result, row)
+			}
+
+		default:
+			err = fmt.Errorf("unknown reader type: %T", reader)
 		}
 	}()
 
-	// Reset to the beginning of the file
-	if err := r.reader.SeekToRow(0); err != nil {
-		return nil, fmt.Errorf("failed to seek to the beginning of the file: %v", err)
+	if err != nil {
+		return nil, err
 	}
 
-	// Read the first n rows
-	result := make([]map[string]interface{}, 0, n)
-	rowBuf := make([]parquet.Row, n)
-	
-	count, err := r.reader.ReadRows(rowBuf)
-	if err != nil && err != io.EOF {
-		return nil, fmt.Errorf("failed to read row data: %v", err)
-	}
-	
-	// Convert to map format
-	for i := 0; i < count; i++ {
-		row := make(map[string]interface{})
-		if err := r.reader.Schema().Reconstruct(&row, rowBuf[i]); err != nil {
-			return nil, fmt.Errorf("failed to convert row data: %v", err)
-		}
-		result = append(result, row)
+	if len(result) == 0 {
+		return nil, fmt.Errorf("no rows could be read from the file")
 	}
 
 	return result, nil
@@ -161,11 +214,11 @@ func (r *ParquetReader) Head(n int) ([]map[string]interface{}, error) {
 
 // Tail returns the last n rows of the file
 func (r *ParquetReader) Tail(n int) ([]map[string]interface{}, error) {
-	// Defensive programming: check if r and r.reader are nil
-	if r == nil || r.reader == nil {
+	// Defensive programming: check if reader is initialized
+	if r == nil || r.genericReader == nil {
 		return nil, fmt.Errorf("invalid reader: reader is not initialized properly")
 	}
-	
+
 	if r.rowNum == 0 {
 		return nil, fmt.Errorf("file is empty")
 	}
@@ -175,40 +228,89 @@ func (r *ParquetReader) Tail(n int) ([]map[string]interface{}, error) {
 		n = int(r.rowNum)
 	}
 
-	// Use recover to catch potential panics
-	defer func() {
-		if r := recover(); r != nil {
-			fmt.Fprintf(os.Stderr, "Error reading Parquet file: %v\n", r)
-		}
-	}()
-
-	// Determine which row to start reading from
+	// Determine the starting row
 	startRow := r.rowNum - int64(n)
 	if startRow < 0 {
 		startRow = 0
 	}
-	
-	// Reset position to the specified row
-	if err := r.reader.SeekToRow(startRow); err != nil {
-		return nil, fmt.Errorf("failed to seek to specified row: %v", err)
+
+	// Use recovery block to handle potential panics
+	var result []map[string]interface{}
+	var err error
+
+	func() {
+		defer func() {
+			if rec := recover(); rec != nil {
+				err = fmt.Errorf("panic while reading rows: %v", rec)
+			}
+		}()
+
+		// Handle different reader types
+		switch reader := r.genericReader.(type) {
+		case *parquet.GenericReader[map[string]interface{}]:
+			// Seek to the starting row
+			reader.SeekToRow(startRow)
+
+			// Read rows with GenericReader
+			rows := make([]map[string]interface{}, n)
+			count, readErr := reader.Read(rows)
+			if readErr != nil && readErr != io.EOF {
+				err = fmt.Errorf("failed to read row data: %v", readErr)
+				return
+			}
+
+			// Take only the rows we actually read
+			result = rows[:count]
+
+		case *parquet.Reader:
+			// Seek to the starting row
+			reader.SeekToRow(startRow)
+
+			// Read rows with classic Reader
+			result = make([]map[string]interface{}, 0, n)
+			rowBuf := make([]parquet.Row, n)
+
+			// Read a batch of rows
+			count, readErr := reader.ReadRows(rowBuf)
+			if readErr != nil && readErr != io.EOF {
+				err = fmt.Errorf("failed to read row data: %v", readErr)
+				return
+			}
+
+			// Process each row
+			for i := 0; i < count; i++ {
+				row := make(map[string]interface{})
+
+				// Safe reconstruction with error handling
+				reconstructErr := func() error {
+					defer func() {
+						if rec := recover(); rec != nil {
+							err = fmt.Errorf("panic during row reconstruction: %v", rec)
+						}
+					}()
+					return reader.Schema().Reconstruct(&row, rowBuf[i])
+				}()
+
+				if reconstructErr != nil {
+					// Skip rows that can't be reconstructed
+					fmt.Fprintf(os.Stderr, "Warning: Skipping row %d due to error: %v\n", i, reconstructErr)
+					continue
+				}
+
+				result = append(result, row)
+			}
+
+		default:
+			err = fmt.Errorf("unknown reader type: %T", reader)
+		}
+	}()
+
+	if err != nil {
+		return nil, err
 	}
 
-	// Read the last n rows
-	result := make([]map[string]interface{}, 0, n)
-	rowBuf := make([]parquet.Row, n)
-	
-	count, err := r.reader.ReadRows(rowBuf)
-	if err != nil && err != io.EOF {
-		return nil, fmt.Errorf("failed to read row data: %v", err)
-	}
-	
-	// Convert to map format
-	for i := 0; i < count; i++ {
-		row := make(map[string]interface{})
-		if err := r.reader.Schema().Reconstruct(&row, rowBuf[i]); err != nil {
-			return nil, fmt.Errorf("failed to convert row data: %v", err)
-		}
-		result = append(result, row)
+	if len(result) == 0 {
+		return nil, fmt.Errorf("no rows could be read from the file")
 	}
 
 	return result, nil
@@ -229,68 +331,86 @@ func (r *ParquetReader) Close() error {
 	if r == nil {
 		return nil
 	}
-	
+
 	var err error
-	if r.reader != nil {
-		err = r.reader.Close()
+
+	// Close the reader based on its type
+	switch reader := r.genericReader.(type) {
+	case *parquet.GenericReader[map[string]interface{}]:
+		err = reader.Close()
+	case *parquet.Reader:
+		err = reader.Close()
 	}
-	
+
 	if r.file != nil {
 		if fileErr := r.file.Close(); fileErr != nil && err == nil {
 			err = fileErr
 		}
 	}
-	
+
 	return err
 }
 
 // GetSchema retrieves the schema information of the Parquet file
 func (r *ParquetReader) GetSchema() (string, error) {
 	// Defensive programming: check if r and r.reader are nil
-	if r == nil || r.reader == nil {
+	if r == nil || r.genericReader == nil {
 		return "", fmt.Errorf("invalid reader: reader is not initialized properly")
 	}
-	
+
 	// Use recover to catch potential panics
 	var schemaStr string
 	var err error
-	
+
 	func() {
 		defer func() {
 			if r := recover(); r != nil {
 				err = fmt.Errorf("error retrieving schema: %v", r)
 			}
 		}()
-		schema := r.reader.Schema()
+
+		var schema *parquet.Schema
+
+		// Get schema based on reader type
+		switch reader := r.genericReader.(type) {
+		case *parquet.GenericReader[map[string]interface{}]:
+			schema = reader.Schema()
+		case *parquet.Reader:
+			schema = reader.Schema()
+		default:
+			err = fmt.Errorf("unknown reader type: %T", r.genericReader)
+			return
+		}
+
 		if schema != nil {
 			schemaStr = schema.String()
 		} else {
 			err = fmt.Errorf("failed to get schema: schema is nil")
 		}
 	}()
-	
+
 	if err != nil {
 		return "", err
 	}
-	
+
 	// Build detailed schema information with improved formatting
 	result := fmt.Sprintf("File contains %d rows of data\n", r.rowNum)
 	result += "Schema elements (fields):\n"
-	result += "------------------------\n"  // Add separator line
+	result += "------------------------\n" // Add separator line
 	result += schemaStr
-	
+
 	return result, nil
 }
 
 // PrintJSON prints data in JSON format
 func PrintJSON(data []map[string]interface{}, w io.Writer, pretty bool) error {
 	encoder := json.NewEncoder(w)
-	
+
 	// Only set indentation if pretty is true
 	if pretty {
 		encoder.SetIndent("", "  ")
 	}
-	
+
 	for _, row := range data {
 		if err := encoder.Encode(row); err != nil {
 			// Check for broken pipe error, stop writing but don't return error
@@ -300,6 +420,6 @@ func PrintJSON(data []map[string]interface{}, w io.Writer, pretty bool) error {
 			return err
 		}
 	}
-	
+
 	return nil
-} 
+}
