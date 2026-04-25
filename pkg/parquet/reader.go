@@ -151,6 +151,46 @@ func (r *ParquetReader) readRows(n int) ([]map[string]interface{}, error) {
 	return result, nil
 }
 
+// StreamAll reads all rows in batches and calls fn for each row.
+// Stops early if fn returns a non-nil error.
+func (r *ParquetReader) StreamAll(fn func(row map[string]interface{}) error) error {
+	if r == nil || r.reader == nil {
+		return fmt.Errorf("invalid reader: reader is not initialized properly")
+	}
+	if r.rowNum == 0 {
+		return nil
+	}
+
+	r.reader.SeekToRow(0)
+	const batchSize = 256
+	rowBuf := make([]parquet.Row, batchSize)
+
+	for {
+		n, readErr := r.reader.ReadRows(rowBuf)
+		if n == 0 && readErr == io.EOF {
+			return nil
+		}
+		if readErr != nil && readErr != io.EOF {
+			return fmt.Errorf("failed to read rows: %v", readErr)
+		}
+
+		for i := 0; i < n; i++ {
+			row := make(map[string]interface{})
+			if err := r.reader.Schema().Reconstruct(&row, rowBuf[i]); err != nil {
+				fmt.Fprintf(os.Stderr, "Warning: Skipping row due to error: %v\n", err)
+				continue
+			}
+			if err := fn(row); err != nil {
+				return err
+			}
+		}
+
+		if readErr == io.EOF {
+			return nil
+		}
+	}
+}
+
 func (r *ParquetReader) Count() (int64, error) {
 	if r == nil {
 		return 0, fmt.Errorf("invalid reader: reader is not initialized properly")
