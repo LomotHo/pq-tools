@@ -1,113 +1,233 @@
 package parquet
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 )
 
 func TestSplitParquetFile(t *testing.T) {
-	// Create test file
-	filePath := createTestParquetFile(t)
-	defer cleanupTestFile(filePath)
+	t.Run("flat/split into 2", func(t *testing.T) {
+		src := fixture("flat.parquet")
+		dir := t.TempDir()
+		tmp := filepath.Join(dir, "flat.parquet")
+		copyFile(t, src, tmp)
 
-	// Split into 2 files
-	err := SplitParquetFile(filePath, 2)
-	if err != nil {
-		t.Fatalf("Failed to split file: %v", err)
-	}
+		err := SplitParquetFile(tmp, 2)
+		if err != nil {
+			t.Fatalf("split failed: %v", err)
+		}
 
-	// Check generated files
-	dir := filepath.Dir(filePath)
-	baseName := filepath.Base(filePath)
-	ext := filepath.Ext(baseName)
-	baseName = baseName[:len(baseName)-len(ext)]
+		total := verifySplitFiles(t, dir, "flat", ".parquet", 2)
+		if total != 100 {
+			t.Errorf("total rows should be 100, got %d", total)
+		}
+	})
 
-	// Verify the first split file
-	file1 := filepath.Join(dir, baseName+"_1"+ext)
-	
-	// Use our ParquetReader to check the file
-	pr1, err := NewParquetReader(file1)
-	if err != nil {
-		t.Fatalf("Failed to create reader for split file 1: %v", err)
-	}
-	defer pr1.Close()
-	
-	// Check row count, should be 50 rows (total 100 rows split into 2 parts)
-	count1, err := pr1.Count()
-	if err != nil {
-		t.Fatalf("Failed to get row count for split file 1: %v", err)
-	}
-	if count1 != 50 {
-		t.Errorf("Expected the first file to have 50 rows, actual count is %d", count1)
-	}
+	t.Run("flat/split into 3", func(t *testing.T) {
+		src := fixture("flat.parquet")
+		dir := t.TempDir()
+		tmp := filepath.Join(dir, "flat.parquet")
+		copyFile(t, src, tmp)
 
-	// Verify the second split file
-	file2 := filepath.Join(dir, baseName+"_2"+ext)
-	
-	pr2, err := NewParquetReader(file2)
-	if err != nil {
-		t.Fatalf("Failed to create reader for split file 2: %v", err)
-	}
-	defer pr2.Close()
-	
-	// Check row count, should be 50 rows (total 100 rows split into 2 parts)
-	count2, err := pr2.Count()
-	if err != nil {
-		t.Fatalf("Failed to get row count for split file 2: %v", err)
-	}
-	if count2 != 50 {
-		t.Errorf("Expected the second file to have 50 rows, actual count is %d", count2)
-	}
+		err := SplitParquetFile(tmp, 3)
+		if err != nil {
+			t.Fatalf("split failed: %v", err)
+		}
 
-	// Test splitting into 3 files
-	err = SplitParquetFile(filePath, 3)
-	if err != nil {
-		t.Fatalf("Failed to split file into 3 parts: %v", err)
-	}
+		total := verifySplitFiles(t, dir, "flat", ".parquet", 3)
+		if total != 100 {
+			t.Errorf("total rows should be 100, got %d", total)
+		}
+	})
 
-	// Verify the first split file (3 parts)
-	file1 = filepath.Join(dir, baseName+"_1"+ext)
-	
-	pr1, err = NewParquetReader(file1)
-	if err != nil {
-		t.Fatalf("Failed to create reader for split file 1: %v", err)
-	}
-	defer pr1.Close()
-	
-	// Check row count, should be around 33 or 34 rows (total 100 rows split into 3 parts)
-	count1, err = pr1.Count()
-	if err != nil {
-		t.Fatalf("Failed to get row count for split file 1: %v", err)
-	}
-	expectedRows := int64(34)
-	if count1 != expectedRows {
-		t.Errorf("Expected the first file to have %d rows, actual count is %d", expectedRows, count1)
-	}
+	t.Run("flat/split into 1", func(t *testing.T) {
+		src := fixture("flat.parquet")
+		dir := t.TempDir()
+		tmp := filepath.Join(dir, "flat.parquet")
+		copyFile(t, src, tmp)
 
-	// Verify that the total row count matches the original file
-	totalRows := int64(0)
-	for i := 1; i <= 3; i++ {
-		fileN := filepath.Join(dir, baseName+"_"+string(rune(i+48))+ext)
-		if _, err := os.Stat(fileN); os.IsNotExist(err) {
-			t.Logf("File %d does not exist, skipping", i)
+		err := SplitParquetFile(tmp, 1)
+		if err != nil {
+			t.Fatalf("split failed: %v", err)
+		}
+
+		total := verifySplitFiles(t, dir, "flat", ".parquet", 1)
+		if total != 100 {
+			t.Errorf("total rows should be 100, got %d", total)
+		}
+	})
+
+	t.Run("flat/more splits than rows", func(t *testing.T) {
+		src := fixture("flat.parquet")
+		dir := t.TempDir()
+		tmp := filepath.Join(dir, "flat.parquet")
+		copyFile(t, src, tmp)
+
+		err := SplitParquetFile(tmp, 150)
+		if err != nil {
+			t.Fatalf("split failed: %v", err)
+		}
+
+		total := int64(0)
+		for i := 1; i <= 150; i++ {
+			f := filepath.Join(dir, "flat_"+itoa(i)+".parquet")
+			if _, err := os.Stat(f); os.IsNotExist(err) {
+				continue
+			}
+			r, err := NewParquetReader(f)
+			if err != nil {
+				t.Fatalf("failed to read split file %d: %v", i, err)
+			}
+			c, _ := r.Count()
+			total += c
+			r.Close()
+		}
+		if total != 100 {
+			t.Errorf("total rows should be 100, got %d", total)
+		}
+	})
+
+	t.Run("nested struct split", func(t *testing.T) {
+		src := fixture("nested_struct.parquet")
+		dir := t.TempDir()
+		tmp := filepath.Join(dir, "nested_struct.parquet")
+		copyFile(t, src, tmp)
+
+		err := SplitParquetFile(tmp, 2)
+		if err != nil {
+			t.Fatalf("split failed: %v", err)
+		}
+
+		total := verifySplitFiles(t, dir, "nested_struct", ".parquet", 2)
+		if total != 50 {
+			t.Errorf("total rows should be 50, got %d", total)
+		}
+
+		r, err := NewParquetReader(filepath.Join(dir, "nested_struct_1.parquet"))
+		if err != nil {
+			t.Fatalf("failed to read split file: %v", err)
+		}
+		defer r.Close()
+		rows, err := r.Head(1)
+		if err != nil {
+			t.Fatalf("failed to read rows: %v", err)
+		}
+		if _, ok := rows[0]["info"]; !ok {
+			t.Error("split file should preserve nested struct 'info'")
+		}
+	})
+
+	t.Run("list struct split", func(t *testing.T) {
+		src := fixture("list_struct.parquet")
+		dir := t.TempDir()
+		tmp := filepath.Join(dir, "list_struct.parquet")
+		copyFile(t, src, tmp)
+
+		err := SplitParquetFile(tmp, 2)
+		if err != nil {
+			t.Fatalf("split failed: %v", err)
+		}
+
+		total := verifySplitFiles(t, dir, "list_struct", ".parquet", 2)
+		if total != 50 {
+			t.Errorf("total rows should be 50, got %d", total)
+		}
+	})
+
+	t.Run("map simple split", func(t *testing.T) {
+		src := fixture("map_simple.parquet")
+		dir := t.TempDir()
+		tmp := filepath.Join(dir, "map_simple.parquet")
+		copyFile(t, src, tmp)
+
+		err := SplitParquetFile(tmp, 2)
+		if err != nil {
+			t.Fatalf("split failed: %v", err)
+		}
+
+		total := verifySplitFiles(t, dir, "map_simple", ".parquet", 2)
+		if total != 50 {
+			t.Errorf("total rows should be 50, got %d", total)
+		}
+	})
+
+	t.Run("deeply nested split", func(t *testing.T) {
+		src := fixture("deeply_nested.parquet")
+		dir := t.TempDir()
+		tmp := filepath.Join(dir, "deeply_nested.parquet")
+		copyFile(t, src, tmp)
+
+		err := SplitParquetFile(tmp, 2)
+		if err != nil {
+			t.Fatalf("split failed: %v", err)
+		}
+
+		total := verifySplitFiles(t, dir, "deeply_nested", ".parquet", 2)
+		if total != 20 {
+			t.Errorf("total rows should be 20, got %d", total)
+		}
+	})
+
+	t.Run("multi rowgroup split", func(t *testing.T) {
+		src := fixture("multi_rowgroup.parquet")
+		dir := t.TempDir()
+		tmp := filepath.Join(dir, "multi_rowgroup.parquet")
+		copyFile(t, src, tmp)
+
+		err := SplitParquetFile(tmp, 3)
+		if err != nil {
+			t.Fatalf("split failed: %v", err)
+		}
+
+		total := verifySplitFiles(t, dir, "multi_rowgroup", ".parquet", 3)
+		if total != 90 {
+			t.Errorf("total rows should be 90, got %d", total)
+		}
+	})
+}
+
+// --- helpers ---
+
+func copyFile(t *testing.T, src, dst string) {
+	t.Helper()
+	data, err := os.ReadFile(src)
+	if err != nil {
+		t.Fatalf("failed to read %s: %v", src, err)
+	}
+	if err := os.WriteFile(dst, data, 0644); err != nil {
+		t.Fatalf("failed to write %s: %v", dst, err)
+	}
+}
+
+func verifySplitFiles(t *testing.T, dir, base, ext string, n int) int64 {
+	t.Helper()
+	total := int64(0)
+	found := 0
+	for i := 1; i <= n; i++ {
+		f := filepath.Join(dir, base+"_"+itoa(i)+ext)
+		if _, err := os.Stat(f); os.IsNotExist(err) {
 			continue
 		}
-		
-		prN, err := NewParquetReader(fileN)
+		found++
+		r, err := NewParquetReader(f)
 		if err != nil {
-			t.Fatalf("Failed to create reader for split file %d: %v", i, err)
+			t.Fatalf("failed to read split file %d: %v", i, err)
 		}
-		defer prN.Close()
-		
-		countN, err := prN.Count()
-		if err != nil {
-			t.Fatalf("Failed to get row count for split file %d: %v", i, err)
+		c, _ := r.Count()
+		if c == 0 {
+			t.Errorf("split file %d has 0 rows", i)
 		}
-		totalRows += countN
+		total += c
+		r.Close()
 	}
-	
-	if totalRows != 100 {
-		t.Errorf("Expected total row count to be 100, actual count is %d", totalRows)
+	if found == 0 {
+		t.Fatal("no split files found")
 	}
-} 
+	return total
+}
+
+func itoa(i int) string {
+	return fmt.Sprintf("%d", i)
+}

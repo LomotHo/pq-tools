@@ -45,3 +45,4 @@ vendor/
 .env
 pq-tools
 pq
+internal/
