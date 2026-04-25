@@ -673,6 +673,75 @@ func TestHeadJSONRoundTrip(t *testing.T) {
 	}
 }
 
+// --- Sample ---
+
+func TestSample(t *testing.T) {
+	t.Run("flat/n=5", func(t *testing.T) {
+		r, _ := NewParquetReader(fixture("flat.parquet"))
+		defer r.Close()
+		rows, err := r.Sample(5)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(rows) != 5 {
+			t.Errorf("expected 5 rows, got %d", len(rows))
+		}
+	})
+
+	t.Run("n exceeds total returns all", func(t *testing.T) {
+		r, _ := NewParquetReader(fixture("nullable.parquet"))
+		defer r.Close()
+		rows, err := r.Sample(100)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(rows) != 5 {
+			t.Errorf("expected 5 rows (clamped), got %d", len(rows))
+		}
+	})
+
+	t.Run("deeply nested", func(t *testing.T) {
+		r, _ := NewParquetReader(fixture("deeply_nested.parquet"))
+		defer r.Close()
+		rows, err := r.Sample(3)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(rows) != 3 {
+			t.Fatalf("expected 3 rows, got %d", len(rows))
+		}
+		if _, ok := rows[0]["data"]; !ok {
+			t.Error("missing 'data' field")
+		}
+	})
+
+	t.Run("empty file returns error", func(t *testing.T) {
+		r, _ := NewParquetReader(fixture("empty.parquet"))
+		defer r.Close()
+		_, err := r.Sample(5)
+		if err == nil {
+			t.Error("expected error for empty file")
+		}
+	})
+
+	t.Run("results are unique", func(t *testing.T) {
+		r, _ := NewParquetReader(fixture("flat.parquet"))
+		defer r.Close()
+		rows, err := r.Sample(20)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		ids := make(map[interface{}]bool)
+		for _, row := range rows {
+			id := row["id"]
+			if ids[id] {
+				t.Errorf("duplicate id: %v", id)
+			}
+			ids[id] = true
+		}
+	})
+}
+
 // --- Benchmarks ---
 
 func BenchmarkHead(b *testing.B) {

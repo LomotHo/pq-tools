@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math/rand"
 	"os"
+	"sort"
 	"syscall"
 
 	"github.com/parquet-go/parquet-go"
@@ -189,6 +191,68 @@ func (r *ParquetReader) StreamAll(fn func(row map[string]interface{}) error) err
 			return nil
 		}
 	}
+}
+
+// Sample returns n randomly selected rows from the file.
+func (r *ParquetReader) Sample(n int) ([]map[string]interface{}, error) {
+	if r == nil || r.reader == nil {
+		return nil, fmt.Errorf("invalid reader: reader is not initialized properly")
+	}
+	if r.rowNum == 0 {
+		return nil, fmt.Errorf("file is empty")
+	}
+	if int64(n) >= r.rowNum {
+		return r.Head(int(r.rowNum))
+	}
+
+	indices := make([]int64, 0, n)
+	seen := make(map[int64]bool, n)
+	for len(indices) < n {
+		idx := rand.Int63n(r.rowNum)
+		if !seen[idx] {
+			seen[idx] = true
+			indices = append(indices, idx)
+		}
+	}
+	sort.Slice(indices, func(i, j int) bool { return indices[i] < indices[j] })
+
+	r.reader.SeekToRow(0)
+	const batchSize = 256
+	rowBuf := make([]parquet.Row, batchSize)
+	result := make([]map[string]interface{}, 0, n)
+	cursor := int64(0)
+	pick := 0
+
+	for pick < len(indices) {
+		readN, readErr := r.reader.ReadRows(rowBuf)
+		if readN == 0 && readErr == io.EOF {
+			break
+		}
+		if readErr != nil && readErr != io.EOF {
+			return nil, fmt.Errorf("failed to read rows: %v", readErr)
+		}
+
+		for i := 0; i < readN && pick < len(indices); i++ {
+			if cursor+int64(i) == indices[pick] {
+				row := make(map[string]interface{})
+				if err := r.reader.Schema().Reconstruct(&row, rowBuf[i]); err != nil {
+					fmt.Fprintf(os.Stderr, "Warning: Skipping row %d due to error: %v\n", cursor+int64(i), err)
+				} else {
+					result = append(result, row)
+				}
+				pick++
+			}
+		}
+		cursor += int64(readN)
+		if readErr == io.EOF {
+			break
+		}
+	}
+
+	if len(result) == 0 {
+		return nil, fmt.Errorf("no rows could be read from the file")
+	}
+	return result, nil
 }
 
 func (r *ParquetReader) Count() (int64, error) {
