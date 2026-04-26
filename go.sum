@@ -1,7 +1,7 @@
 github.com/DATA-DOG/go-sqlmock v1.5.2 h1:OcvFkGmslmlZibjAjaHm3L//6LiuBgolP7OputlJIzU=
 github.com/DATA-DOG/go-sqlmock v1.5.2/go.mod h1:88MAG/4G7SMwSE3CeA0ZKzrT5CiOU3OJ+JlNzwDqpNU=
-github.com/LomotHo/parquet-go v0.0.0-20260425125326-7c28dfa90839 h1:6OJJVcqsxVBcb2evtpE8ORFL98d/cyEsXA9fBHDUGtM=
-github.com/LomotHo/parquet-go v0.0.0-20260425125326-7c28dfa90839/go.mod h1:navtkAYr2LGoJVp141oXPlO/sxLvaOe3la2JEoD8+rg=
+github.com/LomotHo/parquet-go v0.0.0-20260426023926-72a7b56f3c7b h1:keFAV0hSZqa947wwOquBwCuOeor0q+UQRcGrLu4yVdQ=
+github.com/LomotHo/parquet-go v0.0.0-20260426023926-72a7b56f3c7b/go.mod h1:navtkAYr2LGoJVp141oXPlO/sxLvaOe3la2JEoD8+rg=
 github.com/alecthomas/assert/v2 v2.10.0 h1:jjRCHsj6hBJhkmhznrCzoNpbA3zqy0fYiUcYZP/GkPY=
 github.com/alecthomas/assert/v2 v2.10.0/go.mod h1:Bze95FyfUr7x34QZrjL+XP+0qgp/zg8yS+TtBj1WA3k=
 github.com/alecthomas/repr v0.4.0 h1:GhI2A8MACjfegCPVq9f1FLvIBS+DrQ2KQBFZP1iFzXc=
