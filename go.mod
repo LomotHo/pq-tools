@@ -7,7 +7,7 @@ require (
 	github.com/spf13/cobra v1.9.1
 )
 
-replace github.com/parquet-go/parquet-go => github.com/LomotHo/parquet-go v0.0.0-20260425125326-7c28dfa90839
+replace github.com/parquet-go/parquet-go => github.com/LomotHo/parquet-go v0.0.0-20260426023926-72a7b56f3c7b
 
 require (
 	github.com/andybalholm/brotli v1.1.1 // indirect
