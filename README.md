@@ -2,27 +2,39 @@
 
 PQ-Tools is a simple and easy-to-use Parquet file processing toolkit that allows you to work with Parquet files just like JSONL files.
 
+Supports complex nested schemas including structs, lists, maps, and files written by all major Parquet writers (pyarrow, Spark, parquet-cpp-arrow v23+, etc.).
+
 ## Features
 
 - `pq head` - Display the first few rows of a Parquet file
 - `pq tail` - Display the last few rows of a Parquet file
-- `pq cat` - Display all rows in a Parquet file
+- `pq cat` - Stream all rows in a Parquet file (memory-efficient)
+- `pq sample` - Randomly sample rows from a Parquet file
 - `pq wc` - Count the number of rows in a Parquet file
-- `pq split` - Split a Parquet file into multiple smaller files (**Note: Has known issues with INT64 encoding in some files**)
 - `pq schema` - Display the schema of a Parquet file
-- `pq generate` - Generate a test Parquet file with custom schema
+- `pq split` - Split a Parquet file into multiple smaller files
+- `pq generate` - Generate a test Parquet file
+- `pq version` - Display version information
 
 ## Installation
 
+### From GitHub Releases
+
+Download the latest binary for your platform from [Releases](https://github.com/LomotHo/pq-tools/releases).
+
 ```bash
-# Clone the repository
-git clone https://github.com/lomotHo/pq-tools.git
+# Example: Linux amd64
+wget https://github.com/LomotHo/pq-tools/releases/latest/download/pq-linux-amd64.tar.gz
+tar xzf pq-linux-amd64.tar.gz
+sudo mv pq /usr/local/bin/
+```
+
+### Build from source
+
+```bash
+git clone https://github.com/LomotHo/pq-tools.git
 cd pq-tools
-
-# Compile and install
 go build -o pq
-
-# Move the executable to system path
 sudo mv pq /usr/local/bin/
 ```
 
@@ -36,29 +48,44 @@ pq head data.parquet
 
 # Display the first 5 rows
 pq head -n 5 data.parquet
+
+# Pretty print
+pq head -n 5 -p data.parquet
 ```
 
 ### Display the last few rows
 
 ```bash
-# Display the last 10 rows by default
 pq tail data.parquet
-
-# Display the last 5 rows
 pq tail -n 5 data.parquet
 ```
 
-### Display all rows
+### Display all rows (streaming)
 
 ```bash
-# Display all rows in the file
+# Stream all rows — constant memory usage
 pq cat data.parquet
+
+# Works with pipes
+pq cat data.parquet | jq '.name' | head -20
+```
+
+### Random sampling
+
+```bash
+# Sample 10 random rows (default)
+pq sample data.parquet
+
+# Sample 50 random rows
+pq sample -n 50 data.parquet
+
+# Pretty print
+pq sample -n 5 -p data.parquet
 ```
 
 ### Display schema
 
 ```bash
-# Display the schema of a Parquet file
 pq schema data.parquet
 ```
 
@@ -74,8 +101,6 @@ pq wc -l data.parquet
 
 ### Split files
 
-**Note: The split functionality has known issues with some Parquet files, particularly those containing INT64 fields.**
-
 ```bash
 # Split into 2 files by default
 pq split data.parquet
@@ -84,21 +109,19 @@ pq split data.parquet
 pq split -n 5 data.parquet
 ```
 
+Split works with all schema types including nested structs, lists, and maps.
+
 ### Generate test files
 
 ```bash
 # Generate a test file with default schema
 pq generate output.parquet
 
-# Generate a test file with custom schema and 1000 rows
-pq generate output.parquet -r 1000 -s '{"id":"INT64","name":"UTF8","age":"INT32","score":"DOUBLE","active":"BOOLEAN"}'
+# Generate with 1000 rows
+pq generate output.parquet -r 1000
 ```
-
-## Known Issues
-
-1. **Split Command**: The `split` command may fail with an error "encoding parquet data page: encoding not supported for type INT64" when processing certain Parquet files with INT64 fields.
 
 ## Dependencies
 
 - [cobra](https://github.com/spf13/cobra) - Command-line interface framework
-- [parquet-go](https://github.com/parquet-go/parquet-go) - Parquet format processing library for Go
+- [parquet-go](https://github.com/LomotHo/parquet-go) - Parquet format processing library for Go (fork with thrift decoder fixes)
